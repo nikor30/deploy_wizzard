@@ -1,7 +1,8 @@
 from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import Boolean, DateTime, String
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -10,6 +11,51 @@ class Base(DeclarativeBase):
 
 def _utcnow() -> datetime:
     return datetime.now(tz=UTC)
+
+
+class Job(Base):
+    """One wizard run = one batch of devices; state lives server-side so the
+    browser can be closed and the job resumed."""
+
+    __tablename__ = "jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    status: Mapped[str] = mapped_column(String(24), default="in_progress")
+    current_step: Mapped[int] = mapped_column(default=2)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    devices: Mapped[list["JobDevice"]] = relationship(
+        back_populates="job", cascade="all, delete-orphan", order_by="JobDevice.id"
+    )
+
+
+class JobDevice(Base):
+    """A device within a job, including its NetBox match result."""
+
+    __tablename__ = "job_devices"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), index=True)
+    serial: Mapped[str] = mapped_column(String(64))
+    pid: Mapped[str | None] = mapped_column(String(64))
+    ccc_device_id: Mapped[str] = mapped_column(String(64))
+
+    match_status: Mapped[str | None] = mapped_column(String(16))
+    netbox_device_id: Mapped[int | None]
+    netbox_name: Mapped[str | None] = mapped_column(String(256))
+    netbox_site_id: Mapped[int | None]
+    netbox_site_name: Mapped[str | None] = mapped_column(String(256))
+    ccc_site_id: Mapped[str | None] = mapped_column(String(64))
+    ccc_site_name: Mapped[str | None] = mapped_column(String(512))
+    mgmt_ip: Mapped[str | None] = mapped_column(String(64))
+    mgmt_vlan: Mapped[int | None]
+    vlan_options: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
+    state: Mapped[str] = mapped_column(String(24), default="pending")
+
+    job: Mapped[Job] = relationship(back_populates="devices")
 
 
 class SiteMapping(Base):
