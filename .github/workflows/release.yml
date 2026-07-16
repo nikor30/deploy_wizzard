@@ -1,7 +1,12 @@
 name: Release
 
+# Creates a GitHub release (and its tag) when:
+#  - a v* tag is pushed, or
+#  - main is pushed and pyproject.toml's version has no release yet
+#    (tag refs and workflow dispatch are unavailable from the remote dev env).
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -21,13 +26,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          NOTES_FILE="docs/releases/${TAG}.md"
-          ARGS=(--title "PnP Bridge $TAG")
-          # Manual dispatch runs on a branch; gh creates the tag at this commit.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            ARGS+=(--target "$GITHUB_SHA")
+            TAG="${{ github.event.inputs.tag }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${{ github.ref_name }}"
+          else
+            VERSION=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+            TAG="v$VERSION"
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "Release $TAG already exists — nothing to do."
+              exit 0
+            fi
           fi
+          ARGS=(--title "PnP Bridge $TAG" --target "$GITHUB_SHA")
+          NOTES_FILE="docs/releases/${TAG}.md"
           if [ -f "$NOTES_FILE" ]; then
             gh release create "$TAG" "${ARGS[@]}" --notes-file "$NOTES_FILE"
           else
