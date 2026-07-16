@@ -34,8 +34,9 @@ def run_migrations() -> None:
 async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     setup_logging(settings.log_level)
-    # Fail fast on misconfiguration instead of failing on first credential save.
-    settings.require_secret_key()
+    # Zero-config start: generate + persist an encryption key when none is set,
+    # so credentials can be added later via the web UI.
+    settings.ensure_secret_key()
     run_migrations()
     yield
 
