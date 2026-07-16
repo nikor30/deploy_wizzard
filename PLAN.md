@@ -175,11 +175,57 @@ gated until P4. PnP `deviceInfo` field names (`serialNumber`, `pid`, `state`,
 `ipAddress`, `lastContact`) follow CLAUDE.md §6 — verify against a live CCC fixture
 before P4 claiming.
 
-## P4 — Day-0 ☐
+## P4 — Day-0 ✅
 
-Claim payload builder, site-claim execution, task polling (5 s / 30 min, task-tree drill
-for buried errors), SSE progress, ISE webhook sender (HMAC-SHA256, 3× backoff, delivery
-status stored + retryable). Per-device isolation: one failure never aborts siblings.
+**Goal:** wizard step 3 works end-to-end: pick a Day-0 template (+ optional image),
+claim each device to its mapped CCC site, watch live per-device progress, fire the ISE
+webhook on success.
+
+**Affected files:**
+- `app/clients/catalyst.py` — generic authed `_request` (401-refresh also on POST),
+  `claim_device` (site-claim), `get_pnp_device` (state polling), `get_templates`
+- `app/clients/webhook.py` — HMAC-SHA256 signing (`X-PnPB-Signature`), 3× backoff,
+  delivery result reported to caller
+- `app/services/day0.py` — pure `build_claim_payload` (hostname/mgmt IP/mask/VLAN from
+  the job device; CIDR split), `run_day0` orchestration: per-device isolated
+  (`asyncio.gather`, one failure never aborts siblings), states
+  queued → claiming → provisioning → success/failed, PnP-state polling (default 5 s,
+  30 min timeout), webhook fired per successful device (failure logged, never rolls
+  back the claim)
+- `app/db/models.py` + migration `0004` — Job day0 selection (`day0_config_id`,
+  `day0_image_id`) + device timing/error columns; `WebhookDelivery` table (payload,
+  status, attempts, error) so P6 can list + retry deliveries
+- `app/api/wizard.py` — `GET /day0/templates`, `POST /jobs/{id}/claim` (BackgroundTask),
+  `GET /jobs/{id}/events` (SSE snapshots; UI falls back to polling where EventSource
+  is unavailable)
+- Frontend `Wizard.tsx` step 3 — template/image pick, per-device variable preview,
+  live progress badges, Day-N gated until P5
+
+**Payload caution (§4):** `imageInfo`/`configParameters`/template-list field names
+follow the §6 baseline + common CCC 2.3.7 shapes; must be verified against live
+fixtures before production use — capture real responses into `tests/mocks/`.
+
+**Test plan:** unit — payload builder (CIDR split, missing IP/VLAN), HMAC signature
+(known vector), webhook retry/backoff + failure result; service — respx-driven day0 run
+(success path incl. webhook, device failure isolation, poll timeout, error state on
+claim rejection); API — claim endpoint state transitions, SSE snapshot; vitest — step 3
+render, start claim, progress badges via polling fallback.
+
+**Checklist:**
+- [x] Backend + tests green (76 pytest: payload builder, HMAC + retry webhook, day0
+      orchestration incl. per-device isolation / timeout / webhook-never-rolls-back,
+      claim + templates + SSE endpoints)
+- [x] Frontend + tests green (15 vitest)
+- [x] Demo note
+
+**Demo:** headless-browser run of the full flow against mock CCC/NetBox/webhook:
+steps 1–2 as in P3, then step 3 — picked template `Day0-Onboarding`, started the claim,
+watched live SSE progress (queued → provisioning → success; mock CCC needs 3 polls to
+reach `Provisioned`), summary "1 succeeded, 0 failed". The mock CCC received the exact
+site-claim payload (`HOSTNAME=sw-ffm-01`, `MGMT_IP=172.20.10.5`,
+`MGMT_MASK=255.255.255.0`, `MGMT_VLAN=110`, siteId from the mapping) and the mock ISE
+endpoint received one signed `day0_success` webhook with the §5.4 payload. SQLite now
+runs in WAL mode so the SSE reader and background claim writers coexist.
 
 ## P5 — Day-N ☐
 

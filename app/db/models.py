@@ -22,6 +22,8 @@ class Job(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     status: Mapped[str] = mapped_column(String(24), default="in_progress")
     current_step: Mapped[int] = mapped_column(default=2)
+    day0_config_id: Mapped[str | None] = mapped_column(String(64))
+    day0_image_id: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
@@ -54,8 +56,26 @@ class JobDevice(Base):
     mgmt_vlan: Mapped[int | None]
     vlan_options: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
     state: Mapped[str] = mapped_column(String(24), default="pending")
+    error: Mapped[str | None] = mapped_column(String(2048))
+    day0_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    day0_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     job: Mapped[Job] = relationship(back_populates="devices")
+
+
+class WebhookDelivery(Base):
+    """Outcome of one outbound ISE webhook delivery (retryable from the UI in P6)."""
+
+    __tablename__ = "webhook_deliveries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), index=True)
+    device_serial: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(16))
+    attempts: Mapped[int] = mapped_column(default=0)
+    last_error: Mapped[str | None] = mapped_column(String(1024))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class SiteMapping(Base):

@@ -59,6 +59,26 @@ const matchedJob = {
   ],
 }
 
+const templates = [{ id: 'tmpl-1', name: 'Day0-Onboarding', project: 'Onboarding' }]
+
+const runningJob = {
+  ...matchedJob,
+  status: 'day0_running',
+  current_step: 3,
+  devices: matchedJob.devices.map((d) =>
+    d.match_status === 'matched' ? { ...d, state: 'queued' } : d,
+  ),
+}
+
+const finishedJob = {
+  ...matchedJob,
+  status: 'day0_complete',
+  current_step: 3,
+  devices: matchedJob.devices.map((d) =>
+    d.match_status === 'matched' ? { ...d, state: 'success' } : d,
+  ),
+}
+
 function jsonResponse(body: unknown): Response {
   return { ok: true, json: () => Promise.resolve(body) } as Response
 }
@@ -69,9 +89,12 @@ beforeEach(() => {
   fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
     if (url === '/api/wizard/jobs' && !init?.method) return Promise.resolve(jsonResponse([]))
     if (url === '/api/wizard/pnp-devices') return Promise.resolve(jsonResponse(pnpDevices))
+    if (url === '/api/wizard/day0/templates') return Promise.resolve(jsonResponse(templates))
     if (url === '/api/wizard/jobs' && init?.method === 'POST')
       return Promise.resolve(jsonResponse({ ...matchedJob, devices: [] }))
     if (url.endsWith('/match')) return Promise.resolve(jsonResponse(matchedJob))
+    if (url.endsWith('/claim')) return Promise.resolve(jsonResponse(runningJob))
+    if (url === '/api/wizard/jobs/7') return Promise.resolve(jsonResponse(finishedJob))
     if (init?.method === 'PUT')
       return Promise.resolve(jsonResponse({ ...matchedJob.devices[0], mgmt_vlan: 110 }))
     return Promise.resolve(jsonResponse({}))
@@ -105,9 +128,45 @@ describe('Wizard', () => {
     expect(await screen.findByText('sw-ffm-01', { exact: false })).toBeInTheDocument()
     expect(screen.getByText('matched')).toBeInTheDocument()
     expect(screen.getByText('no NetBox match')).toBeInTheDocument()
-    expect(
-      screen.getByRole('button', { name: /Continue to Day-0 claim \(1 device/ }),
-    ).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Continue to Day-0 claim \(1 device/ })).toBeEnabled()
+  })
+
+  it('runs Day-0: template pick, start claim, live progress to summary', async () => {
+    renderWizard()
+    await userEvent.click(screen.getByRole('button', { name: 'Start new onboarding job' }))
+    await userEvent.click(await screen.findByLabelText('Select FCW1234ABCD'))
+    await userEvent.click(screen.getByRole('button', { name: /Continue with 1/ }))
+    await userEvent.click(await screen.findByRole('button', { name: /Continue to Day-0 claim/ }))
+
+    // Step 3: start disabled until a template is picked
+    const startButton = await screen.findByRole('button', { name: /Start Day-0 claim/ })
+    expect(startButton).toBeDisabled()
+    await userEvent.selectOptions(screen.getByLabelText(/Onboarding template/i), 'tmpl-1')
+    expect(startButton).toBeEnabled()
+    await userEvent.click(startButton)
+
+    const claimCall = fetchMock.mock.calls.find(([url]) => (url as string).endsWith('/claim'))
+    expect(JSON.parse((claimCall![1] as RequestInit).body as string)).toEqual({
+      config_id: 'tmpl-1',
+      image_id: null,
+    })
+
+    // Polling fallback (no EventSource in jsdom) picks up the terminal snapshot
+    expect(await screen.findByText('queued')).toBeInTheDocument()
+    expect(await screen.findByText('success', {}, { timeout: 4000 })).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Day-0 finished: 1 succeeded, 0 failed.')
+  })
+
+  it('resumes a day0 job directly into step 3', async () => {
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/wizard/jobs' && !init?.method)
+        return Promise.resolve(jsonResponse([finishedJob]))
+      if (url === '/api/wizard/day0/templates') return Promise.resolve(jsonResponse(templates))
+      return Promise.resolve(jsonResponse(finishedJob))
+    })
+    renderWizard()
+    await userEvent.click(await screen.findByRole('button', { name: 'Resume' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Day-0 finished')
   })
 
   it('filters the device table by serial', async () => {

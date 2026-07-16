@@ -1,16 +1,21 @@
-"""Wizard API: PnP device listing, job lifecycle, NetBox matching (steps 1-2)."""
+"""Wizard API: PnP devices, job lifecycle, matching (steps 1-2), Day-0 claim (step 3)."""
 
+import asyncio
+import json
 import logging
+from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Job, JobDevice, SiteMapping
-from app.db.session import get_db
+from app.db.session import get_db, open_session
 from app.services.connections import get_catalyst_client, get_netbox_client
+from app.services.day0 import run_day0
 from app.services.matching import MATCHED, SiteMappingLookup, match_serials
 
 router = APIRouter(prefix="/api/wizard", tags=["wizard"])
@@ -54,6 +59,7 @@ class JobDeviceOut(BaseModel):
     mgmt_vlan: int | None
     vlan_options: list[dict[str, Any]]
     state: str
+    error: str | None
 
 
 class JobOut(BaseModel):
@@ -86,6 +92,7 @@ def _device_out(device: JobDevice) -> JobDeviceOut:
         mgmt_vlan=device.mgmt_vlan,
         vlan_options=device.vlan_options or [],
         state=device.state,
+        error=device.error,
     )
 
 
@@ -186,6 +193,99 @@ async def match_job(job_id: int, db: DbSession) -> JobOut:
     job.current_step = 2
     db.flush()
     return _job_out(job)
+
+
+class Day0Template(BaseModel):
+    id: str
+    name: str
+    project: str | None = None
+
+
+class ClaimRequest(BaseModel):
+    config_id: str
+    image_id: str | None = None
+    poll_interval: float | None = None
+    timeout: float | None = None
+
+
+@router.get("/day0/templates")
+async def list_day0_templates(db: DbSession) -> list[Day0Template]:
+    async with get_catalyst_client(db) as client:
+        templates = await client.get_templates()
+    result: list[Day0Template] = []
+    for template in templates:
+        template_id = template.get("templateId") or template.get("id")
+        if not template_id:
+            continue
+        result.append(
+            Day0Template(
+                id=str(template_id),
+                name=str(template.get("name", template_id)),
+                project=template.get("projectName"),
+            )
+        )
+    return result
+
+
+@router.post("/jobs/{job_id}/claim")
+def claim_job(
+    job_id: int, payload: ClaimRequest, background: BackgroundTasks, db: DbSession
+) -> JobOut:
+    """Start Day-0 claiming for all matched devices (runs in the background)."""
+    job = _get_job(db, job_id)
+    if job.status == "day0_running":
+        raise HTTPException(status_code=409, detail="Day-0 is already running for this job.")
+    claimable = [d for d in job.devices if d.match_status == MATCHED]
+    if not claimable:
+        raise HTTPException(status_code=422, detail="No matched devices to claim.")
+    job.status = "day0_running"
+    job.current_step = 3
+    for device in claimable:
+        device.state = "queued"
+        device.error = None
+    # Commit now: the background task opens its own sessions and must not
+    # contend with this request's still-open write transaction.
+    db.commit()
+    kwargs: dict[str, Any] = {}
+    if payload.poll_interval is not None:
+        kwargs["poll_interval"] = payload.poll_interval
+    if payload.timeout is not None:
+        kwargs["device_timeout"] = payload.timeout
+    background.add_task(
+        run_day0, job_id, config_id=payload.config_id, image_id=payload.image_id, **kwargs
+    )
+    logger.info("Day-0 started", extra={"job_id": job_id, "devices": len(claimable)})
+    return _job_out(job)
+
+
+def _job_snapshot(job_id: int) -> dict[str, Any] | None:
+    with open_session() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            return None
+        return _job_out(job).model_dump()
+
+
+@router.get("/jobs/{job_id}/events")
+async def job_events(job_id: int, db: DbSession) -> StreamingResponse:
+    """SSE stream of job snapshots while Day-0/Day-N is running."""
+    _get_job(db, job_id)
+
+    async def stream() -> AsyncIterator[str]:
+        while True:
+            snapshot = _job_snapshot(job_id)
+            if snapshot is None:
+                return
+            yield f"data: {json.dumps(snapshot)}\n\n"
+            if not snapshot["status"].endswith("_running"):
+                return
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.put("/jobs/{job_id}/devices/{device_id}")
