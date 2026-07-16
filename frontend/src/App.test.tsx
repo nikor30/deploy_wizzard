@@ -1,21 +1,29 @@
 import { render, screen } from '@testing-library/react'
-import { vi, describe, it, expect, beforeEach } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
+import { describe, expect, it } from 'vitest'
 import App from './App'
 
-describe('App', () => {
-  beforeEach(() => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ status: 'ok', version: '0.1.0' }),
-      }),
+describe('App shell', () => {
+  it('renders the sidebar navigation and the wizard placeholder', () => {
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
     )
+    expect(screen.getByText('PnP Bridge')).toBeInTheDocument()
+    for (const label of ['Wizard', 'Statistics', 'Logs', 'Credentials', 'Site Mapping']) {
+      expect(screen.getByRole('link', { name: label })).toBeInTheDocument()
+    }
+    expect(screen.getByRole('heading', { name: 'Onboarding Wizard' })).toBeInTheDocument()
   })
 
-  it('renders the title and backend health', async () => {
-    render(<App />)
-    expect(screen.getByRole('heading', { name: 'PnP Bridge' })).toBeInTheDocument()
-    expect(await screen.findByTestId('health')).toHaveTextContent('Backend ok · v0.1.0')
+  it('renders placeholder pages for unbuilt phases', () => {
+    render(
+      <MemoryRouter initialEntries={['/settings/dayn']}>
+        <App />
+      </MemoryRouter>,
+    )
+    expect(screen.getByRole('heading', { name: 'Day-N Variables' })).toBeInTheDocument()
+    expect(screen.getByText(/Coming in phase P5/)).toBeInTheDocument()
   })
 })
