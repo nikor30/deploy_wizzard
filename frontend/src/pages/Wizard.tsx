@@ -28,6 +28,8 @@ interface JobDevice {
   mgmt_ip: string | null
   mgmt_vlan: number | null
   vlan_options: VlanOption[]
+  state: string
+  error: string | null
 }
 
 interface Job {
@@ -297,7 +299,7 @@ function matchBadge(status: JobDevice['match_status']) {
   return <span className="text-xs text-slate-400">pending…</span>
 }
 
-function MatchView({ job: initialJob }: { job: Job }) {
+function MatchView({ job: initialJob, onContinue }: { job: Job; onContinue: (job: Job) => void }) {
   const [job, setJob] = useState<Job>(initialJob)
   const [error, setError] = useState<string | null>(null)
   const [matching, setMatching] = useState(false)
@@ -410,35 +412,224 @@ function MatchView({ job: initialJob }: { job: Job }) {
         <button
           type="button"
           className={buttonPrimary}
-          disabled
-          title="Day-0 claiming arrives in P4"
+          disabled={claimable.length === 0 || matching}
+          onClick={() => onContinue(job)}
         >
           Continue to Day-0 claim ({claimable.length} device(s))
         </button>
-        <span className="text-sm text-slate-400">Day-0 claiming arrives in phase P4.</span>
+        {claimable.length === 0 && !matching && (
+          <span className="text-sm text-slate-400">No claimable devices in this job.</span>
+        )}
       </div>
     </div>
   )
 }
 
+const DEVICE_STATE_STYLES: Record<string, string> = {
+  queued: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300',
+  claiming: 'bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300',
+  provisioning: 'bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300',
+  success: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
+  failed: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
+}
+
+function stateBadge(state: string) {
+  const style = DEVICE_STATE_STYLES[state] ?? 'bg-slate-100 text-slate-500 dark:bg-slate-800'
+  return <span className={`rounded px-1.5 py-0.5 text-xs ${style}`}>{state}</span>
+}
+
+interface Day0Template {
+  id: string
+  name: string
+  project: string | null
+}
+
+const isTerminal = (status: string) => !status.endsWith('_running')
+
+function Day0View({ job: initialJob }: { job: Job }) {
+  const [job, setJob] = useState<Job>(initialJob)
+  const [templates, setTemplates] = useState<Day0Template[] | null>(null)
+  const [configId, setConfigId] = useState('')
+  const [imageId, setImageId] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [running, setRunning] = useState(initialJob.status === 'day0_running')
+
+  useEffect(() => {
+    fetchJson<Day0Template[]>('/api/wizard/day0/templates')
+      .then(setTemplates)
+      .catch((err: Error) => setError(err.message))
+  }, [])
+
+  // Live progress: SSE when the browser supports it, 2 s polling otherwise.
+  useEffect(() => {
+    if (!running) return
+    if (typeof EventSource !== 'undefined') {
+      const source = new EventSource(`/api/wizard/jobs/${job.id}/events`)
+      source.onmessage = (event) => {
+        const snapshot = JSON.parse(event.data as string) as Job
+        setJob(snapshot)
+        if (isTerminal(snapshot.status)) {
+          setRunning(false)
+          source.close()
+        }
+      }
+      source.onerror = () => {
+        source.close()
+        setRunning(false)
+      }
+      return () => source.close()
+    }
+    const interval = setInterval(() => {
+      fetchJson<Job>(`/api/wizard/jobs/${job.id}`)
+        .then((snapshot) => {
+          setJob(snapshot)
+          if (isTerminal(snapshot.status)) setRunning(false)
+        })
+        .catch(() => undefined)
+    }, 2000)
+    return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running, job.id])
+
+  const start = async () => {
+    setError(null)
+    try {
+      const started = await fetchJson<Job>(`/api/wizard/jobs/${job.id}/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config_id: configId, image_id: imageId || null }),
+      })
+      setJob(started)
+      setRunning(true)
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
+
+  const claimable = job.devices.filter((d) => d.match_status === 'matched')
+  const finished = isTerminal(job.status) && job.status.startsWith('day0_')
+  const succeeded = claimable.filter((d) => d.state === 'success').length
+  const failed = claimable.filter((d) => d.state === 'failed').length
+
+  return (
+    <div className="mt-8">
+      <ErrorBanner message={error} />
+      {!running && !finished && (
+        <section
+          aria-label="Day-0 configuration"
+          className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
+        >
+          <h2 className="font-semibold">Day-0 onboarding configuration</h2>
+          <div className="mt-3 flex flex-wrap gap-4">
+            <label className="block">
+              <span className="text-xs text-slate-400 uppercase">Onboarding template</span>
+              <select
+                className="mt-1 block w-72 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
+                value={configId}
+                onChange={(e) => setConfigId(e.target.value)}
+              >
+                <option value="">— select template —</option>
+                {(templates ?? []).map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.project ? `${template.project} / ` : ''}
+                    {template.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="text-xs text-slate-400 uppercase">Image ID (optional)</span>
+              <input
+                type="text"
+                className="mt-1 block w-72 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
+                value={imageId}
+                placeholder="leave empty to skip image install"
+                onChange={(e) => setImageId(e.target.value)}
+              />
+            </label>
+          </div>
+        </section>
+      )}
+
+      <div className="mt-4 flex flex-col gap-3">
+        {claimable.map((device) => (
+          <section
+            key={device.id}
+            aria-label={`Day-0 ${device.serial}`}
+            className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-mono font-semibold">{device.serial}</span>
+              {stateBadge(device.state)}
+            </div>
+            <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+              {device.netbox_name} → {device.ccc_site_name} · IP {device.mgmt_ip ?? '—'} · VLAN{' '}
+              {device.mgmt_vlan ?? '—'}
+            </p>
+            {device.error && (
+              <p className="mt-2 text-sm text-rose-700 dark:text-rose-300">{device.error}</p>
+            )}
+          </section>
+        ))}
+      </div>
+
+      <div className="mt-6 flex items-center gap-3">
+        {!running && !finished && (
+          <button
+            type="button"
+            className={buttonPrimary}
+            disabled={!configId}
+            onClick={() => void start()}
+          >
+            Start Day-0 claim ({claimable.length} device(s))
+          </button>
+        )}
+        {running && <span className="text-sm text-sky-600 dark:text-sky-400">Claiming…</span>}
+        {finished && (
+          <>
+            <span
+              role="status"
+              className="rounded-md bg-slate-100 px-3 py-2 text-sm dark:bg-slate-800"
+            >
+              Day-0 finished: {succeeded} succeeded, {failed} failed.
+            </span>
+            <button type="button" className={buttonPrimary} disabled title="Day-N arrives in P5">
+              Continue to Day-N
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+const STEP_FOR_VIEW: Record<string, number> = { start: 1, select: 1, match: 2, day0: 3 }
+
 export default function Wizard() {
-  const [view, setView] = useState<'start' | 'select' | 'match'>('start')
+  const [view, setView] = useState<'start' | 'select' | 'match' | 'day0'>('start')
   const [job, setJob] = useState<Job | null>(null)
 
   const openJob = (selected: Job) => {
     setJob(selected)
-    setView('match')
+    // Resume where the job left off: step 3 once Day-0 was started.
+    setView(selected.status.startsWith('day0_') ? 'day0' : 'match')
+  }
+
+  const toDay0 = (current: Job) => {
+    setJob(current)
+    setView('day0')
   }
 
   return (
     <div className="max-w-5xl">
       <h1 className="text-2xl font-bold tracking-tight">Onboarding Wizard</h1>
       <div className="mt-4">
-        <Stepper active={view === 'match' ? 2 : 1} />
+        <Stepper active={STEP_FOR_VIEW[view]} />
       </div>
       {view === 'start' && <StartView onNew={() => setView('select')} onResume={openJob} />}
       {view === 'select' && <SelectView onJobCreated={openJob} />}
-      {view === 'match' && job && <MatchView job={job} />}
+      {view === 'match' && job && <MatchView job={job} onContinue={toDay0} />}
+      {view === 'day0' && job && <Day0View job={job} />}
     </div>
   )
 }

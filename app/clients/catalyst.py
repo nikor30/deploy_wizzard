@@ -85,29 +85,59 @@ class CatalystCenterClient:
                 self._token_fetched_at = time.monotonic()
             return self._token
 
-    async def _get(self, path: str, params: dict[str, Any] | None = None) -> httpx.Response:
-        """Authenticated GET with retry, plus 401-refresh-retry exactly once."""
-        token = await self._get_token()
+    async def _send(
+        self,
+        method: str,
+        path: str,
+        token: str,
+        params: dict[str, Any] | None,
+        json: dict[str, Any] | None,
+    ) -> httpx.Response:
+        headers = {"X-Auth-Token": token}
         async with self._semaphore:
-            response = await get_with_retries(
-                self._client, path, headers={"X-Auth-Token": token}, params=params
-            )
+            if method == "GET":
+                # only GETs are idempotent — retry with backoff
+                return await get_with_retries(self._client, path, headers=headers, params=params)
+            try:
+                return await self._client.request(
+                    method, path, headers=headers, params=params, json=json
+                )
+            except httpx.TransportError as exc:
+                raise CatalystError(f"Cannot reach Catalyst Center: {exc}") from exc
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        """Authenticated request with 401-refresh-retry exactly once."""
+        token = await self._get_token()
+        response = await self._send(method, path, token, params, json)
         if response.status_code == 401:
             token = await self._get_token(force_refresh=True)
-            async with self._semaphore:
-                response = await get_with_retries(
-                    self._client, path, headers={"X-Auth-Token": token}, params=params
-                )
+            response = await self._send(method, path, token, params, json)
             if response.status_code == 401:
                 raise CatalystAuthError(
                     "Catalyst Center returned 401 even after a token refresh. "
                     "Check the credentials in Settings."
                 )
         if response.status_code >= 400:
+            detail = ""
+            try:
+                body = response.json()
+                detail = f" — {body.get('message') or body.get('response') or ''}".rstrip(" —")
+            except ValueError:
+                pass
             raise CatalystError(
-                f"Catalyst Center GET {path} failed with HTTP {response.status_code}."
+                f"Catalyst Center {method} {path} failed with HTTP {response.status_code}{detail}."
             )
         return response
+
+    async def _get(self, path: str, params: dict[str, Any] | None = None) -> httpx.Response:
+        return await self._request("GET", path, params=params)
 
     async def _get_paginated(
         self, path: str, params: dict[str, Any] | None = None
@@ -140,3 +170,21 @@ class CatalystCenterClient:
         return await self._get_paginated(
             "/dna/intent/api/v1/onboarding/pnp-device", params={"state": state}
         )
+
+    async def get_pnp_device(self, device_id: str) -> dict[str, Any]:
+        """Single PnP device — used to poll deviceInfo.state during claiming."""
+        response = await self._get(f"/dna/intent/api/v1/onboarding/pnp-device/{device_id}")
+        return dict(response.json())
+
+    async def claim_device(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST site-claim (§6.1). Not retried — claiming is not idempotent."""
+        response = await self._request(
+            "POST", "/dna/intent/api/v1/onboarding/pnp-device/site-claim", json=payload
+        )
+        return dict(response.json())
+
+    async def get_templates(self) -> list[dict[str, Any]]:
+        """Onboarding/CLI templates from the template programmer."""
+        response = await self._get("/dna/intent/api/v1/template-programmer/template")
+        body = response.json()
+        return list(body) if isinstance(body, list) else list(body.get("response", []))
