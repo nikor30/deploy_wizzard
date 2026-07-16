@@ -14,6 +14,7 @@ import app as app_pkg
 from app.api.health import router as health_router
 from app.api.mappings import router as mappings_router
 from app.api.settings import router as settings_router
+from app.api.wizard import router as wizard_router
 from app.config import get_settings
 from app.errors import ConfigurationError, PnPBridgeError
 from app.logging_setup import setup_logging
@@ -44,6 +45,7 @@ def create_app() -> FastAPI:
     application.include_router(health_router)
     application.include_router(settings_router)
     application.include_router(mappings_router)
+    application.include_router(wizard_router)
 
     @application.exception_handler(PnPBridgeError)
     async def pnpb_error_handler(_request: Request, exc: PnPBridgeError) -> JSONResponse:

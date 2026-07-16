@@ -3,12 +3,13 @@ import Layout from './components/Layout'
 import Placeholder from './components/Placeholder'
 import SettingsCredentials from './pages/SettingsCredentials'
 import SettingsMapping from './pages/SettingsMapping'
+import Wizard from './pages/Wizard'
 
 export default function App() {
   return (
     <Routes>
       <Route element={<Layout />}>
-        <Route index element={<Placeholder title="Onboarding Wizard" phase="P3" />} />
+        <Route index element={<Wizard />} />
         <Route path="settings/credentials" element={<SettingsCredentials />} />
         <Route path="settings/mapping" element={<SettingsMapping />} />
         <Route path="settings/dayn" element={<Placeholder title="Day-N Variables" phase="P5" />} />

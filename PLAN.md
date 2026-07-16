@@ -129,11 +129,50 @@ bumped to **1.0.0** for the first tagged release (release notes in
 `docs/releases/v1.0.0.md`, release created by `.github/workflows/release.yml` on tag
 push).
 
-## P3 — Wizard steps 1–2 ☐
+## P3 — Wizard steps 1–2 ✅
 
-Job model + migration, PnP unclaimed device listing (paginated, auto-refresh),
-`services/matching.py` (serial `strip().upper()` normalization, `planned` filter,
-site-mapping resolution, mgmt-IP fallback lookup), match review UI, resumable job state.
+**Goal:** wizard steps 1 (select unclaimed PnP devices) and 2 (NetBox match review)
+working end-to-end with server-side resumable job state.
+
+**Affected files:**
+- `app/db/models.py` + migration `0003_jobs` — `Job` (status, current_step, timestamps)
+  and `JobDevice` (serial/pid/ccc_device_id + match result columns: netbox ids/names,
+  ccc site, mgmt IP, mgmt VLAN, `match_status` ∈ matched | unmatched | unmapped_site)
+- `app/services/matching.py` — `normalize_serial` (`strip().upper()`), match selected
+  CCC devices against NetBox `planned` devices by serial, resolve CCC site via the
+  mapping table, mgmt IP from `primary_ip4` with fallback to the device's
+  `mgmt*`/`Vlan*` interface IPs, VLAN options from the device's site
+- `app/api/wizard.py` — `GET /api/wizard/pnp-devices` (live unclaimed list),
+  `POST /api/wizard/jobs` (create with selected devices), `GET /api/wizard/jobs`,
+  `GET /api/wizard/jobs/{id}`, `POST /api/wizard/jobs/{id}/match` (run + persist),
+  `PUT /api/wizard/jobs/{id}/devices/{device_id}` (pick mgmt VLAN)
+- Frontend `pages/Wizard.tsx` — job start/resume, Step 1 table (multi-select, search
+  serial/PID, refresh + 60 s auto-refresh), Step 2 side-by-side match review with VLAN
+  dropdown, unmatched/unmapped flags linking to Settings → Mapping; Day-0 button
+  present but disabled until P4
+
+**Rule honored:** unmatched or unmapped devices can never proceed to claiming.
+
+**Test plan:** unit tests for matching (normalization incl. messy serials, unmatched,
+unmapped site, mgmt-IP fallback, VLAN options); wizard API tests via respx (pnp list,
+job create/resume, match persistence, VLAN update validation); vitest for step
+transitions, selection gating, match-row rendering, VLAN pick.
+
+**Checklist:**
+- [x] Backend + tests green (54 pytest; matching suite covers messy serials, unmatched,
+      unmapped site, mgmt-IP fallback, VLAN options; wizard API suite covers job
+      lifecycle, match persistence/resume, VLAN validation)
+- [x] Frontend + tests green (13 vitest)
+- [x] Demo note
+
+**Demo:** headless-browser run against `:8060` with mock CCC/NetBox: new job → step 1
+table shows 2 unclaimed PnP devices → select both → step 2 shows one matched
+(sw-ffm-01, FFM-DC1, mgmt IP prefilled, VLAN dropdown from site VLANs) and one
+"no NetBox match" (excluded from claiming) → picked VLAN 110 → closed the wizard →
+resumed the job → match result and VLAN selection persisted; Day-0 button correctly
+gated until P4. PnP `deviceInfo` field names (`serialNumber`, `pid`, `state`,
+`ipAddress`, `lastContact`) follow CLAUDE.md §6 — verify against a live CCC fixture
+before P4 claiming.
 
 ## P4 — Day-0 ☐
 
