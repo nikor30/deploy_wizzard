@@ -43,14 +43,57 @@ db stub), `frontend/` (Vite + React 18 + TS + Tailwind), `Containerfile`, `compo
 
 ---
 
-## P1 — Settings & clients ☐
+## P1 — Settings & clients ✅
 
-Encrypted credential store (Fernet, `PNPB_SECRET_KEY` required), SQLAlchemy models +
-first Alembic migration, `CatalystCenterClient` (token auth, 401-refresh-once, 55-min
-proactive refresh, global 5-conn semaphore, retries), `NetBoxClient` (token auth,
-pagination, retries), typed error hierarchy, connection-test endpoints, Settings →
-Credentials UI with masked secrets. Tests: respx client tests (token refresh, retry,
-pagination, error mapping), redaction tests.
+**Goal:** credentials can be stored encrypted, tested against live CCC/NetBox, and both
+API clients exist with auth, retry, and pagination — plus the first real UI (app shell +
+Settings → Credentials page).
+
+**Affected files:**
+- `app/crypto.py` — Fernet encrypt/decrypt + `mask_secret` (`****abcd`)
+- `app/errors.py` — typed error hierarchy (`PnPBridgeError`, `CatalystAuthError`,
+  `CatalystApiError`, `NetBoxAuthError`, `NetBoxNotFound`, `NetBoxApiError`,
+  `TaskTimeout` for P4)
+- `app/db/` — SQLAlchemy base/session, `ServiceSettings` model (one row per service:
+  `catalyst` / `netbox` / `webhook`; secrets stored Fernet-encrypted), Alembic env +
+  initial migration; `alembic upgrade head` runs at app startup
+- `app/clients/base.py` — shared httpx wrapper: 30 s timeout, 3× backoff retries on
+  idempotent GETs
+- `app/clients/catalyst.py` — Basic-auth token fetch, `X-Auth-Token` header,
+  401-refresh-once + proactive refresh at 55 min behind an async lock, global
+  5-connection semaphore, paginated `get_sites` / `get_pnp_devices`
+- `app/clients/netbox.py` — `Authorization: Token`, `get_status`, paginated devices /
+  VLANs, `patch_device_status`
+- `app/api/settings.py` — `GET/PUT /api/settings/credentials` (secrets write-only,
+  masked on read), `POST /api/settings/credentials/{service}/test`
+- `app/logging_setup.py` — redaction of secret-like keys in structured log context
+- `app/config.py` — `PNPB_SECRET_KEY` now **required** (fail fast at startup)
+- Frontend: react-router app shell (sidebar nav with placeholder routes), Settings →
+  Credentials page (3 blocks, test-connection buttons, masked values)
+
+**Endpoints touched (external):** CCC `POST /dna/system/api/v1/auth/token`,
+`GET /dna/intent/api/v1/site`, `GET /dna/intent/api/v1/onboarding/pnp-device`;
+NetBox `GET /api/status/`, `GET /api/dcim/devices/`, `GET /api/ipam/vlans/`,
+`PATCH /api/dcim/devices/{id}/`.
+
+**Test plan:** unit tests for crypto + masking + redaction; respx client tests (token
+fetch, 401-refresh-once then loud failure, proactive expiry refresh, GET retry/backoff,
+pagination, error mapping); settings API round-trip (PUT then GET returns masked, secret
+never in response/logs); connection-test endpoints against respx mocks; frontend vitest
+for the settings form (masked display, save, test button states).
+
+**Checklist:**
+- [x] Backend implementation + tests green (34 pytest, incl. respx client suites)
+- [x] Frontend shell + credentials page + tests green (5 vitest)
+- [x] Migration included (`0001_service_settings`); migrations run in app lifespan;
+      `PNPB_SECRET_KEY` required (fail fast at startup)
+- [x] Demo note
+
+**Demo:** with the SPA built and mock CCC/NetBox running, the full flow was driven with
+a headless browser against `:8060`: fill credentials → "Test connection" hits the real
+clients (CCC token + site count, NetBox status) → save → reload shows `****1234` masked
+placeholders and the plaintext secret appears nowhere in the page. SPA routes survive
+reload via the FastAPI fallback route.
 
 ## P2 — Site mapping ☐
 
