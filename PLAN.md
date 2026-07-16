@@ -34,8 +34,9 @@ db stub), `frontend/` (Vite + React 18 + TS + Tailwind), `Containerfile`, `compo
 - Local sandbox has Python 3.11 only (proxy blocks the 3.12 standalone download), so
   `requires-python = ">=3.11"` for now; the Containerfile and CI pin **3.12** per
   CLAUDE.md. Revisit when a 3.12 interpreter is available locally.
-- `PNPB_SECRET_KEY` is optional until P1 (credential store) actually needs it; P1 must
-  make it required and fail fast at startup.
+- `PNPB_SECRET_KEY` is optional: when unset, a Fernet key is generated at first start
+  and persisted as `secret.key` next to the DB (zero-config container start; decided
+  after P3 — the env var takes precedence when set).
 - Alembic is wired in P1 together with the first real models (no empty migration churn).
 
 **Demo:** `make image && make run` → `curl localhost:8060/api/health` returns

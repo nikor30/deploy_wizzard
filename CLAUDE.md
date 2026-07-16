@@ -37,7 +37,7 @@ on **port 8060**.
 | Backend | Python 3.12, **FastAPI**, `httpx` (async) | All external API calls async with timeouts + retries |
 | Task handling | FastAPI `BackgroundTasks` + APScheduler | Task polling of CCC claim/deploy tasks; no Celery/Redis |
 | DB | **SQLite** via SQLAlchemy 2.x + Alembic | Stores settings, mappings, job history, logs |
-| Secrets | `cryptography` (Fernet) | API tokens encrypted at rest; key from `PNPB_SECRET_KEY` env var |
+| Secrets | `cryptography` (Fernet) | API tokens encrypted at rest; key from `PNPB_SECRET_KEY` env var, or auto-generated at first start and persisted as `secret.key` next to the DB (zero-config start; all credentials entered via the web UI) |
 | Frontend | **React 18 + Vite + TypeScript + Tailwind CSS** | Built statically, served by FastAPI (`/` → SPA, `/api/*` → REST) |
 | UI components | Headless UI / Radix primitives | Responsive, dark-mode capable, no heavy UI framework |
 | Container | Multi-stage build (node build → python runtime) | Final image runs `uvicorn app.main:app --host 0.0.0.0 --port 8060` |
@@ -285,8 +285,10 @@ make image      # podman build -t pnp-bridge:dev -f Containerfile .
 make run        # podman run --rm -p 8060:8060 -e PNPB_SECRET_KEY=... -v pnpb-data:/data pnp-bridge:dev
 ```
 
-Runtime env vars: `PNPB_SECRET_KEY` (required, Fernet key), `PNPB_DB_PATH`
-(default `/data/pnpb.sqlite`), `PNPB_LOG_LEVEL`, `PNPB_PORT` (default **8060**).
+Runtime env vars: `PNPB_SECRET_KEY` (optional Fernet key; when unset one is generated at
+first start and persisted as `secret.key` next to the DB — keep the `/data` volume or
+set the env var explicitly), `PNPB_DB_PATH` (default `/data/pnpb.sqlite`),
+`PNPB_LOG_LEVEL`, `PNPB_PORT` (default **8060**).
 
 ---
 
