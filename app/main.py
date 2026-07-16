@@ -10,10 +10,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+import app as app_pkg
 from app.api.health import router as health_router
+from app.api.mappings import router as mappings_router
 from app.api.settings import router as settings_router
 from app.config import get_settings
-from app.errors import PnPBridgeError
+from app.errors import ConfigurationError, PnPBridgeError
 from app.logging_setup import setup_logging
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -38,13 +40,15 @@ async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    application = FastAPI(title="PnP Bridge", version="0.1.0", lifespan=lifespan)
+    application = FastAPI(title="PnP Bridge", version=app_pkg.__version__, lifespan=lifespan)
     application.include_router(health_router)
     application.include_router(settings_router)
+    application.include_router(mappings_router)
 
     @application.exception_handler(PnPBridgeError)
     async def pnpb_error_handler(_request: Request, exc: PnPBridgeError) -> JSONResponse:
-        return JSONResponse(status_code=500, content={"detail": exc.message})
+        status = 400 if isinstance(exc, ConfigurationError) else 500
+        return JSONResponse(status_code=status, content={"detail": exc.message})
 
     if STATIC_DIR.is_dir():
         application.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")

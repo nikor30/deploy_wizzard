@@ -95,10 +95,39 @@ clients (CCC token + site count, NetBox status) → save → reload shows `****1
 placeholders and the plaintext secret appears nowhere in the page. SPA routes survive
 reload via the FastAPI fallback route.
 
-## P2 — Site mapping ☐
+## P2 — Site mapping ✅
 
-Mapping model + migration, `/api/mappings` CRUD, JSON import/export, two-column mapping
-UI (NetBox sites ↔ CCC hierarchy) with search, unmapped highlighting.
+**Goal:** persistable NetBox↔CCC site mapping editable in a two-column UI, exportable/
+importable as JSON — the prerequisite for wizard Step 2 site resolution.
+
+**Affected files:**
+- `app/db/models.py` + migration `0002_site_mappings` — `SiteMapping`
+  (`netbox_site_id` unique, `netbox_site_name`, `ccc_site_id`, `ccc_site_name`)
+- `app/services/connections.py` — build configured clients from the stored
+  (decrypted) credentials; `ConfigurationError` when a service isn't configured
+- `app/api/mappings.py` — `GET/PUT /api/mappings/sites` (PUT replaces the full list —
+  used by both the editor and JSON import; export is the GET payload),
+  `GET /api/mappings/sources/netbox` and `/sources/ccc` (live site lists)
+- `app/main.py` — `ConfigurationError` → HTTP 400 with actionable message
+- Frontend `pages/SettingsMapping.tsx` — two searchable columns (NetBox sites left,
+  CCC hierarchy right), click-to-pair, mapped list with remove, unmapped NetBox sites
+  highlighted, Save / Export JSON / Import JSON
+
+**Test plan:** mappings API round-trip + full-replace semantics + duplicate rejection;
+sources endpoints via respx (TestClient traffic passed through); vitest: render sources,
+pair a mapping, save payload shape, unmapped highlight.
+
+**Checklist:**
+- [x] Backend + tests green (40 pytest)
+- [x] Frontend + tests green (9 vitest)
+- [x] Demo note
+
+**Demo:** headless-browser run against `:8060` with mock CCC/NetBox: mapping page loads
+both site lists live, two pairs mapped by clicking left→right, saved, page reload shows
+the persisted mappings ("Mappings (2)"), CCC column search filters correctly. Version
+bumped to **1.0.0** for the first tagged release (release notes in
+`docs/releases/v1.0.0.md`, release created by `.github/workflows/release.yml` on tag
+push).
 
 ## P3 — Wizard steps 1–2 ☐
 

@@ -12,6 +12,21 @@ def _utcnow() -> datetime:
     return datetime.now(tz=UTC)
 
 
+class SiteMapping(Base):
+    """Maps a NetBox site to a Catalyst Center site (hierarchy node)."""
+
+    __tablename__ = "site_mappings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    netbox_site_id: Mapped[int] = mapped_column(unique=True, index=True)
+    netbox_site_name: Mapped[str] = mapped_column(String(256))
+    ccc_site_id: Mapped[str] = mapped_column(String(64))
+    ccc_site_name: Mapped[str] = mapped_column(String(512))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
 class ServiceSettings(Base):
     """Connection settings for one external service: catalyst, netbox, or webhook.
 
