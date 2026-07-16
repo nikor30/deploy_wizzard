@@ -1,0 +1,16 @@
+# Dev convenience stack. Mock CCC/NetBox servers join here in P1/P3.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Containerfile
+    ports:
+      - "8060:8060"
+    environment:
+      PNPB_SECRET_KEY: ${PNPB_SECRET_KEY:-}
+      PNPB_LOG_LEVEL: ${PNPB_LOG_LEVEL:-INFO}
+    volumes:
+      - pnpb-data:/data
+
+volumes:
+  pnpb-data:
