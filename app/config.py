@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     secret_key: str | None = None
     db_path: str = "/data/pnpb.sqlite"
     log_level: str = "INFO"
+    log_retention_days: int = 90
     port: int = 8060
 
     @property

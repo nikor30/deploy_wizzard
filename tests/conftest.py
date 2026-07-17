@@ -24,5 +24,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClie
         with TestClient(create_app()) as test_client:
             yield test_client
     finally:
+        # Drain queued DB-sink records before the engine (and tmp DB) go away.
+        from app.logging_setup import flush_db_sink
+
+        flush_db_sink()
         reset_engine()
         get_settings.cache_clear()

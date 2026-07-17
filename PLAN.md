@@ -279,10 +279,50 @@ CCC/NetBox/ISE: after Day-0, picked the Day-N template → "Resolve variables" f
 exactly one `PATCH {"status": "active"}`. Job statuses `completed` / `partial_success`
 / `dayn_failed` verified in unit tests.
 
-## P6 — Stats & logs ☐
+## P6 — Stats & logs ✅
 
-DB log sink with redaction, `/logs` UI (filters, expandable context, webhook retry),
-stats aggregation + charts, retention job (default 90 days, nightly).
+**Goal:** searchable log page fed by a redacted DB log sink (with webhook retry) and a
+statistics dashboard; nightly retention cleanup.
+
+**Affected files:**
+- `app/db/models.py` + migration `0006` — `LogEntry` (timestamp, level, component,
+  message, job_id, device_serial, redacted context JSON); `JobDevice.dayn_started_at`
+  / `dayn_finished_at` for Day-N durations
+- `app/logging_setup.py` — DB sink handler for `app.*` loggers (reuses the existing
+  redaction; recursion-safe: SQLAlchemy/uvicorn loggers excluded)
+- `app/services/stats.py` — aggregation: totals (claimed/provisioned/failed),
+  success rate, avg Day-0/Day-N duration, failures by error category, jobs over time;
+  `PNPB_LOG_RETENTION_DAYS` (default 90) cleanup used by a nightly APScheduler job
+  started in the app lifespan
+- `app/api/logs.py` — `GET /api/logs` (filters: job, serial, level, component, text,
+  time range; paginated), `GET /api/logs/webhook-deliveries`,
+  `POST /api/logs/webhook-deliveries/{id}/retry` (re-send stored payload with current
+  webhook settings, delivery row updated)
+- `app/api/stats.py` — `GET /api/stats?days=N`
+- Frontend — `Logs.tsx` (filter bar, expandable context rows, webhook deliveries with
+  Retry), `Stats.tsx` (summary tiles + charts)
+
+**Test plan:** DB sink writes redacted context and skips non-app loggers; retention
+cleanup deletes only old rows; logs API filter matrix; webhook retry success + failure
+paths; stats aggregation against seeded jobs (durations, categories, success rate);
+vitest for logs filters/expansion/retry and stats rendering.
+
+**Checklist:**
+- [x] Backend + tests green (99 pytest)
+- [x] Frontend + tests green (24 vitest)
+- [x] Demo note
+
+**Notes:** the DB sink is queue-based (worker thread) — a synchronous sink deadlocked
+against the request's own open SQLite write transaction (busy-timeout stalls; caught by
+the test suite crawling from 19 s to 214 s). Chart palette (blue/orange) validated for
+light + dark and CVD with the dataviz checker.
+
+**Demo:** headless-browser run against `:8060` with mock CCC/NetBox: Day-0 job with a
+dead webhook target → Logs page shows "Failed webhook deliveries (1)" → Retry button
+re-sent the stored payload to the (now reachable) mock ISE (verified received) →
+level filter + expandable redacted context work; Stats page shows tiles (success rate
+100%, avg Day-0 1s), the devices-per-day chart and the failure-category chart.
+Retention cleanup and the log-sink redaction are unit-tested.
 
 ## P7 — Hardening ☐
 

@@ -17,13 +17,13 @@ describe('App shell', () => {
     expect(screen.getByRole('heading', { name: 'Onboarding Wizard' })).toBeInTheDocument()
   })
 
-  it('renders placeholder pages for unbuilt phases', () => {
+  it('routes to the statistics page', () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) }))
     render(
       <MemoryRouter initialEntries={['/stats']}>
         <App />
       </MemoryRouter>,
     )
     expect(screen.getByRole('heading', { name: 'Statistics' })).toBeInTheDocument()
-    expect(screen.getByText(/Coming in phase P6/)).toBeInTheDocument()
   })
 })

@@ -12,8 +12,10 @@ from fastapi.staticfiles import StaticFiles
 
 import app as app_pkg
 from app.api.health import router as health_router
+from app.api.logs import router as logs_router
 from app.api.mappings import router as mappings_router
 from app.api.settings import router as settings_router
+from app.api.stats import router as stats_router
 from app.api.wizard import router as wizard_router
 from app.config import get_settings
 from app.errors import ConfigurationError, PnPBridgeError
@@ -38,7 +40,20 @@ async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
     # so credentials can be added later via the web UI.
     settings.ensure_secret_key()
     run_migrations()
-    yield
+    # Nightly log retention (default 90 days, configurable).
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from app.services.stats import cleanup_old_logs
+
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(
+        cleanup_old_logs, "cron", hour=3, minute=0, args=[settings.log_retention_days]
+    )
+    scheduler.start()
+    try:
+        yield
+    finally:
+        scheduler.shutdown(wait=False)
 
 
 def create_app() -> FastAPI:
@@ -47,6 +62,8 @@ def create_app() -> FastAPI:
     application.include_router(settings_router)
     application.include_router(mappings_router)
     application.include_router(wizard_router)
+    application.include_router(logs_router)
+    application.include_router(stats_router)
 
     @application.exception_handler(PnPBridgeError)
     async def pnpb_error_handler(_request: Request, exc: PnPBridgeError) -> JSONResponse:
