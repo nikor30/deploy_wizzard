@@ -114,6 +114,20 @@ function StartView({ onNew, onResume }: { onNew: () => void; onResume: (job: Job
       .catch((err: Error) => setError(err.message))
   }, [])
 
+  const deleteJob = async (job: Job) => {
+    setError(null)
+    try {
+      const res = await fetch(`/api/wizard/jobs/${job.id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const body = (await res.json()) as { detail?: string }
+        throw new Error(body.detail ?? `HTTP ${res.status}`)
+      }
+      setJobs((prev) => (prev ?? []).filter((j) => j.id !== job.id))
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
+
   return (
     <div className="mt-8">
       <button type="button" className={buttonPrimary} onClick={onNew}>
@@ -127,15 +141,34 @@ function StartView({ onNew, onResume }: { onNew: () => void; onResume: (job: Job
             {jobs.map((job) => (
               <li
                 key={job.id}
-                className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-900"
+                className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-900"
               >
                 <span>
                   Job #{job.id} · {job.device_count} device(s) · step {job.current_step} ·{' '}
-                  {new Date(job.created_at).toLocaleString()}
+                  {job.status.replace('_', ' ')} · {new Date(job.created_at).toLocaleString()}
                 </span>
-                <button type="button" className={buttonSecondary} onClick={() => onResume(job)}>
-                  Resume
-                </button>
+                <span className="flex shrink-0 gap-2">
+                  <button type="button" className={buttonSecondary} onClick={() => onResume(job)}>
+                    Resume
+                  </button>
+                  <button
+                    type="button"
+                    className={
+                      'rounded-md border border-rose-300 px-3 py-1.5 text-sm font-medium ' +
+                      'text-rose-700 hover:bg-rose-50 disabled:opacity-50 ' +
+                      'dark:border-rose-800 dark:text-rose-300 dark:hover:bg-rose-950/40'
+                    }
+                    disabled={job.status.endsWith('_running')}
+                    title={
+                      job.status.endsWith('_running')
+                        ? 'Running jobs must finish before they can be deleted'
+                        : `Delete job #${job.id}`
+                    }
+                    onClick={() => void deleteJob(job)}
+                  >
+                    Delete
+                  </button>
+                </span>
               </li>
             ))}
           </ul>
@@ -301,12 +334,20 @@ function matchBadge(status: JobDevice['match_status']) {
   return <span className="text-xs text-slate-400">pending…</span>
 }
 
-function MatchView({ job: initialJob, onContinue }: { job: Job; onContinue: (job: Job) => void }) {
+function MatchView({
+  job: initialJob,
+  onContinue,
+  onBack,
+}: {
+  job: Job
+  onContinue: (job: Job) => void
+  onBack: () => void
+}) {
   const [job, setJob] = useState<Job>(initialJob)
   const [error, setError] = useState<string | null>(null)
   const [matching, setMatching] = useState(false)
 
-  useEffect(() => {
+  const runMatch = useCallback(() => {
     setMatching(true)
     fetchJson<Job>(`/api/wizard/jobs/${initialJob.id}/match`, { method: 'POST' })
       .then((matched) => {
@@ -316,6 +357,10 @@ function MatchView({ job: initialJob, onContinue }: { job: Job; onContinue: (job
       .catch((err: Error) => setError(err.message))
       .finally(() => setMatching(false))
   }, [initialJob.id])
+
+  useEffect(() => {
+    runMatch()
+  }, [runMatch])
 
   const pickVlan = async (device: JobDevice, vid: number | null) => {
     try {
@@ -341,8 +386,12 @@ function MatchView({ job: initialJob, onContinue }: { job: Job; onContinue: (job
   return (
     <div className="mt-8">
       <p className="text-sm text-slate-500 dark:text-slate-400">
-        Job #{job.id} — matching CCC serials against NetBox devices with status <code>planned</code>
-        . {matching && 'Matching…'}
+        Job #{job.id} — matching CCC serials against NetBox. {matching && 'Matching…'}
+      </p>
+      <p className="mt-2 rounded-md bg-sky-50 px-3 py-2 text-sm text-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+        A device matches when a NetBox device has the <strong>same serial number</strong> and status{' '}
+        <strong>planned</strong>. Fix the device in NetBox (add the serial, set the status), then
+        hit <strong>Re-run matching</strong> — no need to start a new job.
       </p>
       <ErrorBanner message={error} />
       <div className="mt-4 flex flex-col gap-3">
@@ -411,6 +460,12 @@ function MatchView({ job: initialJob, onContinue }: { job: Job; onContinue: (job
         ))}
       </div>
       <div className="mt-6 flex items-center gap-3">
+        <button type="button" className={buttonSecondary} onClick={onBack}>
+          ← Back to jobs
+        </button>
+        <button type="button" className={buttonSecondary} disabled={matching} onClick={runMatch}>
+          {matching ? 'Matching…' : 'Re-run matching'}
+        </button>
         <button
           type="button"
           className={buttonPrimary}
@@ -486,7 +541,15 @@ function useJobWatch(
   }, [running, jobId])
 }
 
-function Day0View({ job: initialJob, onContinue }: { job: Job; onContinue: (job: Job) => void }) {
+function Day0View({
+  job: initialJob,
+  onContinue,
+  onBack,
+}: {
+  job: Job
+  onContinue: (job: Job) => void
+  onBack: () => void
+}) {
   const [job, setJob] = useState<Job>(initialJob)
   const [templates, setTemplates] = useState<Day0Template[] | null>(null)
   const [configId, setConfigId] = useState('')
@@ -586,14 +649,19 @@ function Day0View({ job: initialJob, onContinue }: { job: Job; onContinue: (job:
 
       <div className="mt-6 flex items-center gap-3">
         {!running && !finished && (
-          <button
-            type="button"
-            className={buttonPrimary}
-            disabled={!configId}
-            onClick={() => void start()}
-          >
-            Start Day-0 claim ({claimable.length} device(s))
-          </button>
+          <>
+            <button type="button" className={buttonSecondary} onClick={onBack}>
+              ← Back to matching
+            </button>
+            <button
+              type="button"
+              className={buttonPrimary}
+              disabled={!configId}
+              onClick={() => void start()}
+            >
+              Start Day-0 claim ({claimable.length} device(s))
+            </button>
+          </>
         )}
         {running && <span className="text-sm text-sky-600 dark:text-sky-400">Claiming…</span>}
         {finished && (
@@ -887,8 +955,12 @@ export default function Wizard() {
       </div>
       {view === 'start' && <StartView onNew={() => setView('select')} onResume={openJob} />}
       {view === 'select' && <SelectView onJobCreated={openJob} />}
-      {view === 'match' && job && <MatchView job={job} onContinue={toDay0} />}
-      {view === 'day0' && job && <Day0View job={job} onContinue={toDayN} />}
+      {view === 'match' && job && (
+        <MatchView job={job} onContinue={toDay0} onBack={() => setView('start')} />
+      )}
+      {view === 'day0' && job && (
+        <Day0View job={job} onContinue={toDayN} onBack={() => setView('match')} />
+      )}
       {view === 'dayn' && job && <DayNView job={job} />}
     </div>
   )

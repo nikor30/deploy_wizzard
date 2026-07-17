@@ -267,6 +267,70 @@ describe('Wizard', () => {
     })
   })
 
+  it('shows the match requirements and re-runs matching on demand', async () => {
+    renderWizard()
+    await userEvent.click(screen.getByRole('button', { name: 'Start new onboarding job' }))
+    await userEvent.click(await screen.findByLabelText('Select FCW1234ABCD'))
+    await userEvent.click(screen.getByRole('button', { name: /Continue with 1/ }))
+
+    const banner = await screen.findByText(/same serial number/)
+    expect(banner.closest('div')?.textContent).toMatch(/planned/)
+
+    const matchCallsBefore = fetchMock.mock.calls.filter(([url]) =>
+      (url as string).endsWith('/match'),
+    ).length
+    await userEvent.click(screen.getByRole('button', { name: 'Re-run matching' }))
+    await waitFor(() => {
+      const matchCallsAfter = fetchMock.mock.calls.filter(([url]) =>
+        (url as string).endsWith('/match'),
+      ).length
+      expect(matchCallsAfter).toBe(matchCallsBefore + 1)
+    })
+  })
+
+  it('navigates back from matching to the job list', async () => {
+    renderWizard()
+    await userEvent.click(screen.getByRole('button', { name: 'Start new onboarding job' }))
+    await userEvent.click(await screen.findByLabelText('Select FCW1234ABCD'))
+    await userEvent.click(screen.getByRole('button', { name: /Continue with 1/ }))
+    await userEvent.click(await screen.findByRole('button', { name: '← Back to jobs' }))
+    expect(
+      await screen.findByRole('button', { name: 'Start new onboarding job' }),
+    ).toBeInTheDocument()
+  })
+
+  it('deletes a job from the start view', async () => {
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE')
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
+      if (url === '/api/wizard/jobs' && !init?.method)
+        return Promise.resolve(jsonResponse([matchedJob]))
+      return Promise.resolve(jsonResponse({}))
+    })
+    renderWizard()
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument(),
+    )
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          (url as string) === '/api/wizard/jobs/7' && (init as RequestInit)?.method === 'DELETE',
+      ),
+    ).toBe(true)
+  })
+
+  it('disables deleting running jobs', async () => {
+    const runningListJob = { ...matchedJob, status: 'day0_running' }
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/wizard/jobs' && !init?.method)
+        return Promise.resolve(jsonResponse([runningListJob]))
+      return Promise.resolve(jsonResponse({}))
+    })
+    renderWizard()
+    expect(await screen.findByRole('button', { name: 'Delete' })).toBeDisabled()
+  })
+
   it('offers resuming an existing job from the start view', async () => {
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       if (url === '/api/wizard/jobs' && !init?.method)

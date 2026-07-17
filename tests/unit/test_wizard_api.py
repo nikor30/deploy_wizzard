@@ -206,3 +206,34 @@ def test_pnp_source_ip_fallbacks(client: TestClient) -> None:
     assert by_serial["SN-IFACES"] == "172.20.99.12"
     assert by_serial["SN-PLAIN"] == "172.20.99.13"
     assert by_serial["SN-NONE"] is None
+
+
+def test_delete_job_removes_job_and_devices(client: TestClient) -> None:
+    job_id = client.post(
+        "/api/wizard/jobs",
+        json={"devices": [{"serial": "FCW1", "pid": None, "ccc_device_id": "pnp-1"}]},
+    ).json()["id"]
+    assert client.delete(f"/api/wizard/jobs/{job_id}").status_code == 204
+    assert client.get(f"/api/wizard/jobs/{job_id}").status_code == 404
+    assert client.get("/api/wizard/jobs").json() == []
+
+
+def test_delete_running_job_rejected(client: TestClient) -> None:
+    from app.db.models import Job
+    from app.db.session import open_session
+
+    job_id = client.post(
+        "/api/wizard/jobs",
+        json={"devices": [{"serial": "FCW1", "pid": None, "ccc_device_id": "pnp-1"}]},
+    ).json()["id"]
+    with open_session() as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        job.status = "day0_running"
+    response = client.delete(f"/api/wizard/jobs/{job_id}")
+    assert response.status_code == 409
+    assert "running" in response.json()["detail"]
+
+
+def test_delete_unknown_job_404(client: TestClient) -> None:
+    assert client.delete("/api/wizard/jobs/999").status_code == 404
