@@ -110,6 +110,28 @@ def _job_out(job: Job) -> JobOut:
     )
 
 
+def _pnp_source_ip(info: dict[str, Any]) -> str | None:
+    """Best-effort source IP of an unclaimed PnP device.
+
+    Live CCC carries it in deviceInfo.httpHeaders (key "clientAddress") or
+    deviceInfo.ipInterfaces rather than a plain ipAddress field."""
+    for key in ("ipAddress", "sourceIpAddress"):
+        value = info.get(key)
+        if isinstance(value, str) and value:
+            return value
+    for header in info.get("httpHeaders") or []:
+        if isinstance(header, dict) and header.get("key") == "clientAddress":
+            value = header.get("value")
+            if isinstance(value, str) and value:
+                return value
+    for interface in info.get("ipInterfaces") or []:
+        if isinstance(interface, dict):
+            value = interface.get("ipv4Address")
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
 def _get_job(db: Session, job_id: int) -> Job:
     job = db.get(Job, job_id)
     if job is None:
@@ -134,7 +156,7 @@ async def list_pnp_devices(db: DbSession) -> list[PnpDevice]:
                 serial=serial,
                 pid=info.get("pid"),
                 state=info.get("state"),
-                ip_address=info.get("ipAddress"),
+                ip_address=_pnp_source_ip(info),
                 last_contact=str(info.get("lastContact")) if info.get("lastContact") else None,
             )
         )
