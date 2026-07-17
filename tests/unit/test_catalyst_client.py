@@ -124,3 +124,34 @@ async def test_pnp_devices_passes_state_param() -> None:
     async with CatalystCenterClient(BASE, "admin", "pw") as client:
         await client.get_pnp_devices()
     assert pnp_route.calls[0].request.url.params["state"] == "Unclaimed"
+
+
+@respx.mock
+async def test_pnp_devices_accepts_bare_array_response() -> None:
+    """Live CCC 2.3.7 returns the PnP list as a bare JSON array (no 'response'
+    wrapper) — regression for the wizard 500 on real Catalyst Center."""
+    respx.post(TOKEN_URL).respond(200, json={"Token": "tok"})
+    pnp_route = respx.get(f"{BASE}/dna/intent/api/v1/onboarding/pnp-device")
+    pnp_route.side_effect = [
+        httpx.Response(
+            200,
+            json=[
+                {"id": f"pnp-{i}", "deviceInfo": {"serialNumber": f"SN{i}"}}
+                for i in range(PAGE_SIZE)
+            ],
+        ),
+        httpx.Response(200, json=[{"id": "pnp-x", "deviceInfo": {"serialNumber": "SNX"}}]),
+    ]
+    async with CatalystCenterClient(BASE, "admin", "pw") as client:
+        devices = await client.get_pnp_devices()
+    assert len(devices) == PAGE_SIZE + 1
+    assert pnp_route.call_count == 2
+
+
+@respx.mock
+async def test_unexpected_pagination_shape_raises_typed_error() -> None:
+    respx.post(TOKEN_URL).respond(200, json={"Token": "tok"})
+    respx.get(SITE_URL).respond(200, json={"response": "not-a-list"})
+    async with CatalystCenterClient(BASE, "admin", "pw") as client:
+        with pytest.raises(CatalystError, match="Unexpected response shape"):
+            await client.get_sites()

@@ -150,8 +150,13 @@ class CatalystCenterClient:
             page_params.update({"limit": PAGE_SIZE, "offset": offset})
             response = await self._get(path, params=page_params)
             payload = response.json()
-            page = payload.get("response", payload)
-            if not isinstance(page, list):
+            # Some CCC list endpoints wrap the page in {"response": [...]},
+            # others (e.g. the PnP device list on live 2.3.7) return a bare array.
+            if isinstance(payload, list):
+                page = payload
+            elif isinstance(payload, dict) and isinstance(payload.get("response"), list):
+                page = payload["response"]
+            else:
                 raise CatalystError(f"Unexpected response shape from Catalyst Center {path}.")
             items.extend(page)
             if len(page) < PAGE_SIZE:

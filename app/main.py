@@ -1,5 +1,6 @@
 """FastAPI app factory and static SPA mount."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -66,9 +67,26 @@ def create_app() -> FastAPI:
     application.include_router(stats_router)
 
     @application.exception_handler(PnPBridgeError)
-    async def pnpb_error_handler(_request: Request, exc: PnPBridgeError) -> JSONResponse:
+    async def pnpb_error_handler(request: Request, exc: PnPBridgeError) -> JSONResponse:
         status = 400 if isinstance(exc, ConfigurationError) else 500
+        logging.getLogger("app.api").warning(
+            "%s %s failed: %s", request.method, request.url.path, exc.message
+        )
         return JSONResponse(status_code=status, content={"detail": exc.message})
+
+    @application.exception_handler(Exception)
+    async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
+        # Every unexpected error must be visible on the Logs page (app.* sink).
+        logging.getLogger("app.api").exception(
+            "Unhandled error on %s %s", request.method, request.url.path
+        )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": f"Unexpected error: {type(exc).__name__}: {exc}. "
+                "See the Logs page for details."
+            },
+        )
 
     if STATIC_DIR.is_dir():
         application.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
