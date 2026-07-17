@@ -189,6 +189,20 @@ def get_job(job_id: int, db: DbSession) -> JobOut:
     return _job_out(_get_job(db, job_id))
 
 
+@router.delete("/jobs/{job_id}", status_code=204)
+def delete_job(job_id: int, db: DbSession) -> None:
+    """Delete a job and its devices. Running jobs must finish first."""
+    job = _get_job(db, job_id)
+    if job.status.endswith("_running"):
+        raise HTTPException(
+            status_code=409,
+            detail="This job is currently running - wait for it to finish before deleting.",
+        )
+    db.delete(job)
+    db.flush()
+    logger.info("Deleted job", extra={"job_id": job_id})
+
+
 @router.post("/jobs/{job_id}/match")
 async def match_job(job_id: int, db: DbSession) -> JobOut:
     """Run NetBox matching for all devices of the job and persist the results."""

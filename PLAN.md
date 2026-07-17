@@ -324,6 +324,22 @@ level filter + expandable redacted context work; Stats page shows tiles (success
 100%, avg Day-0 1s), the devices-per-day chart and the failure-category chart.
 Retention cleanup and the log-sink redaction are unit-tested.
 
+## Wizard UX follow-ups (live-testing feedback) ✅
+
+User feedback after live wizard runs: no way to step back or re-pull data, the
+serial/`planned` match requirements were undocumented in the UI, and stale jobs
+could not be removed.
+
+- [x] `DELETE /api/wizard/jobs/{id}` — cascades to devices, 409 while a job is
+  `*_running`, 404 unknown (3 new pytest)
+- [x] Start view: per-job Delete button (disabled + tooltip while running), job
+  status shown in the list
+- [x] Match view: info banner explaining a match needs the **same serial number**
+  and NetBox status **planned**, plus "Re-run matching" and "← Back to jobs"
+- [x] Day-0 view: "← Back to matching"
+- [x] 4 new vitest cases (re-run refetches `/match`, back navigation, delete,
+  delete disabled while running)
+
 ## P7 — Hardening ☐
 
 Playwright e2e suite, polling load tests, failure injection (401/429/5xx, timeouts,
