@@ -30,6 +30,7 @@ interface JobDevice {
   vlan_options: VlanOption[]
   state: string
   error: string | null
+  dayn_variables: Record<string, { value: string | null; source: 'mapped' | 'manual' }> | null
 }
 
 interface Job {
@@ -38,6 +39,7 @@ interface Job {
   current_step: number
   created_at: string
   device_count: number
+  dayn_template_id?: string | null
   devices: JobDevice[]
 }
 
@@ -446,25 +448,17 @@ interface Day0Template {
 
 const isTerminal = (status: string) => !status.endsWith('_running')
 
-function Day0View({ job: initialJob }: { job: Job }) {
-  const [job, setJob] = useState<Job>(initialJob)
-  const [templates, setTemplates] = useState<Day0Template[] | null>(null)
-  const [configId, setConfigId] = useState('')
-  const [imageId, setImageId] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [running, setRunning] = useState(initialJob.status === 'day0_running')
-
-  useEffect(() => {
-    fetchJson<Day0Template[]>('/api/wizard/day0/templates')
-      .then(setTemplates)
-      .catch((err: Error) => setError(err.message))
-  }, [])
-
+function useJobWatch(
+  jobId: number,
+  running: boolean,
+  setJob: (job: Job) => void,
+  setRunning: (running: boolean) => void,
+) {
   // Live progress: SSE when the browser supports it, 2 s polling otherwise.
   useEffect(() => {
     if (!running) return
     if (typeof EventSource !== 'undefined') {
-      const source = new EventSource(`/api/wizard/jobs/${job.id}/events`)
+      const source = new EventSource(`/api/wizard/jobs/${jobId}/events`)
       source.onmessage = (event) => {
         const snapshot = JSON.parse(event.data as string) as Job
         setJob(snapshot)
@@ -480,7 +474,7 @@ function Day0View({ job: initialJob }: { job: Job }) {
       return () => source.close()
     }
     const interval = setInterval(() => {
-      fetchJson<Job>(`/api/wizard/jobs/${job.id}`)
+      fetchJson<Job>(`/api/wizard/jobs/${jobId}`)
         .then((snapshot) => {
           setJob(snapshot)
           if (isTerminal(snapshot.status)) setRunning(false)
@@ -489,7 +483,24 @@ function Day0View({ job: initialJob }: { job: Job }) {
     }, 2000)
     return () => clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, job.id])
+  }, [running, jobId])
+}
+
+function Day0View({ job: initialJob, onContinue }: { job: Job; onContinue: (job: Job) => void }) {
+  const [job, setJob] = useState<Job>(initialJob)
+  const [templates, setTemplates] = useState<Day0Template[] | null>(null)
+  const [configId, setConfigId] = useState('')
+  const [imageId, setImageId] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [running, setRunning] = useState(initialJob.status === 'day0_running')
+
+  useEffect(() => {
+    fetchJson<Day0Template[]>('/api/wizard/day0/templates')
+      .then(setTemplates)
+      .catch((err: Error) => setError(err.message))
+  }, [])
+
+  useJobWatch(job.id, running, setJob, setRunning)
 
   const start = async () => {
     setError(null)
@@ -593,8 +604,13 @@ function Day0View({ job: initialJob }: { job: Job }) {
             >
               Day-0 finished: {succeeded} succeeded, {failed} failed.
             </span>
-            <button type="button" className={buttonPrimary} disabled title="Day-N arrives in P5">
-              Continue to Day-N
+            <button
+              type="button"
+              className={buttonPrimary}
+              disabled={succeeded === 0}
+              onClick={() => onContinue(job)}
+            >
+              Continue to Day-N ({succeeded} device(s))
             </button>
           </>
         )}
@@ -603,16 +619,251 @@ function Day0View({ job: initialJob }: { job: Job }) {
   )
 }
 
-const STEP_FOR_VIEW: Record<string, number> = { start: 1, select: 1, match: 2, day0: 3 }
+const JOB_DONE_STATUSES = ['completed', 'partial_success', 'dayn_failed']
+
+function DayNView({ job: initialJob }: { job: Job }) {
+  const [job, setJob] = useState<Job>(initialJob)
+  const [templates, setTemplates] = useState<Day0Template[] | null>(null)
+  const [templateId, setTemplateId] = useState(initialJob.dayn_template_id ?? '')
+  const [prepared, setPrepared] = useState(
+    initialJob.devices.some((d) => d.dayn_variables !== null),
+  )
+  const [manual, setManual] = useState<Record<number, Record<string, string>>>({})
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [running, setRunning] = useState(initialJob.status === 'dayn_running')
+
+  useEffect(() => {
+    fetchJson<Day0Template[]>('/api/wizard/day0/templates')
+      .then(setTemplates)
+      .catch((err: Error) => setError(err.message))
+  }, [])
+
+  useJobWatch(job.id, running, setJob, setRunning)
+
+  const eligible = job.devices.filter((d) =>
+    [
+      'success',
+      'dayn_failed',
+      'activate_failed',
+      'dayn_queued',
+      'dayn_deploying',
+      'completed',
+    ].includes(d.state),
+  )
+  const done = JOB_DONE_STATUSES.includes(job.status)
+
+  const prepare = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const updated = await fetchJson<Job>(`/api/wizard/jobs/${job.id}/dayn/prepare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template_id: templateId }),
+      })
+      setJob(updated)
+      setPrepared(true)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const deploy = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const started = await fetchJson<Job>(`/api/wizard/jobs/${job.id}/dayn/deploy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template_id: templateId, manual }),
+      })
+      setJob(started)
+      setRunning(true)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const setManualValue = (deviceId: number, variable: string, value: string) =>
+    setManual((prev) => ({
+      ...prev,
+      [deviceId]: { ...(prev[deviceId] ?? {}), [variable]: value },
+    }))
+
+  const manualComplete = eligible.every((device) =>
+    Object.entries(device.dayn_variables ?? {}).every(
+      ([variable, info]) =>
+        info.source !== 'manual' || (manual[device.id]?.[variable] ?? '').trim() !== '',
+    ),
+  )
+
+  if (done) {
+    const completed = job.devices.filter((d) => d.state === 'completed')
+    const activateFailed = job.devices.filter((d) => d.state === 'activate_failed')
+    const daynFailed = job.devices.filter((d) => d.state === 'dayn_failed')
+    const banner =
+      job.status === 'completed'
+        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
+        : job.status === 'partial_success'
+          ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300'
+          : 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300'
+    return (
+      <div className="mt-8">
+        <p role="status" className={`rounded-md px-4 py-3 text-sm font-medium ${banner}`}>
+          Job #{job.id} {job.status.replace('_', ' ')}: {completed.length} device(s) active in
+          NetBox, {activateFailed.length} activation failure(s), {daynFailed.length} Day-N
+          failure(s).
+        </p>
+        <div className="mt-4 flex flex-col gap-3">
+          {job.devices.map((device) => (
+            <section
+              key={device.id}
+              aria-label={`Summary ${device.serial}`}
+              className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-mono font-semibold">{device.serial}</span>
+                {stateBadge(device.state)}
+              </div>
+              <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+                {device.netbox_name ?? '—'} · {device.ccc_site_name ?? '—'}
+              </p>
+              {device.error && (
+                <p className="mt-2 text-sm text-rose-700 dark:text-rose-300">{device.error}</p>
+              )}
+            </section>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-8">
+      <ErrorBanner message={error} />
+      {!running && (
+        <section
+          aria-label="Day-N configuration"
+          className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
+        >
+          <h2 className="font-semibold">Day-N template</h2>
+          <div className="mt-3 flex flex-wrap items-end gap-4">
+            <label className="block">
+              <span className="text-xs text-slate-400 uppercase">Template</span>
+              <select
+                className="mt-1 block w-72 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
+                value={templateId}
+                onChange={(e) => setTemplateId(e.target.value)}
+              >
+                <option value="">— select template —</option>
+                {(templates ?? []).map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.project ? `${template.project} / ` : ''}
+                    {template.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className={buttonSecondary}
+              disabled={!templateId || busy}
+              onClick={() => void prepare()}
+            >
+              {busy ? 'Working…' : 'Resolve variables'}
+            </button>
+          </div>
+        </section>
+      )}
+
+      {prepared && (
+        <div className="mt-4 flex flex-col gap-3">
+          {eligible.map((device) => (
+            <section
+              key={device.id}
+              aria-label={`Day-N ${device.serial}`}
+              className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-mono font-semibold">{device.serial}</span>
+                {stateBadge(device.state)}
+              </div>
+              {device.error && (
+                <p className="mt-2 text-sm text-rose-700 dark:text-rose-300">{device.error}</p>
+              )}
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {Object.entries(device.dayn_variables ?? {}).map(([variable, info]) =>
+                  info.source === 'manual' ? (
+                    <label key={variable} className="block">
+                      <span className="text-xs text-amber-600 uppercase dark:text-amber-400">
+                        {variable} (manual)
+                      </span>
+                      <input
+                        type="text"
+                        required
+                        className="mt-1 block w-full rounded-md border border-amber-300 bg-white px-2 py-1.5 text-sm dark:border-amber-700 dark:bg-slate-900"
+                        value={manual[device.id]?.[variable] ?? ''}
+                        onChange={(e) => setManualValue(device.id, variable, e.target.value)}
+                      />
+                    </label>
+                  ) : (
+                    <div key={variable}>
+                      <span className="text-xs text-slate-400 uppercase">{variable}</span>
+                      <p className="mt-1 rounded-md bg-slate-50 px-2 py-1.5 font-mono text-sm dark:bg-slate-800">
+                        {String(info.value)}
+                      </p>
+                    </div>
+                  ),
+                )}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-6 flex items-center gap-3">
+        {!running && prepared && (
+          <button
+            type="button"
+            className={buttonPrimary}
+            disabled={!manualComplete || busy}
+            onClick={() => void deploy()}
+          >
+            Deploy Day-N ({eligible.length} device(s))
+          </button>
+        )}
+        {!running && prepared && !manualComplete && (
+          <span className="text-sm text-amber-600 dark:text-amber-400">
+            Fill in all manual variables first.
+          </span>
+        )}
+        {running && <span className="text-sm text-sky-600 dark:text-sky-400">Deploying…</span>}
+      </div>
+    </div>
+  )
+}
+
+const STEP_FOR_VIEW: Record<string, number> = { start: 1, select: 1, match: 2, day0: 3, dayn: 4 }
 
 export default function Wizard() {
-  const [view, setView] = useState<'start' | 'select' | 'match' | 'day0'>('start')
+  const [view, setView] = useState<'start' | 'select' | 'match' | 'day0' | 'dayn'>('start')
   const [job, setJob] = useState<Job | null>(null)
 
   const openJob = (selected: Job) => {
     setJob(selected)
-    // Resume where the job left off: step 3 once Day-0 was started.
-    setView(selected.status.startsWith('day0_') ? 'day0' : 'match')
+    // Resume where the job left off.
+    if (selected.status.startsWith('dayn_') || JOB_DONE_STATUSES.includes(selected.status)) {
+      setView('dayn')
+    } else if (selected.status.startsWith('day0_')) {
+      setView('day0')
+    } else {
+      setView('match')
+    }
   }
 
   const toDay0 = (current: Job) => {
@@ -620,16 +871,25 @@ export default function Wizard() {
     setView('day0')
   }
 
+  const toDayN = (current: Job) => {
+    setJob(current)
+    setView('dayn')
+  }
+
+  const activeStep =
+    view === 'dayn' && job && JOB_DONE_STATUSES.includes(job.status) ? 5 : STEP_FOR_VIEW[view]
+
   return (
     <div className="max-w-5xl">
       <h1 className="text-2xl font-bold tracking-tight">Onboarding Wizard</h1>
       <div className="mt-4">
-        <Stepper active={STEP_FOR_VIEW[view]} />
+        <Stepper active={activeStep} />
       </div>
       {view === 'start' && <StartView onNew={() => setView('select')} onResume={openJob} />}
       {view === 'select' && <SelectView onJobCreated={openJob} />}
       {view === 'match' && job && <MatchView job={job} onContinue={toDay0} />}
-      {view === 'day0' && job && <Day0View job={job} />}
+      {view === 'day0' && job && <Day0View job={job} onContinue={toDayN} />}
+      {view === 'dayn' && job && <DayNView job={job} />}
     </div>
   )
 }

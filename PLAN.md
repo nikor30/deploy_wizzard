@@ -227,11 +227,57 @@ site-claim payload (`HOSTNAME=sw-ffm-01`, `MGMT_IP=172.20.10.5`,
 endpoint received one signed `day0_success` webhook with the §5.4 payload. SQLite now
 runs in WAL mode so the SSE reader and background claim writers coexist.
 
-## P5 — Day-N ☐
+## P5 — Day-N ✅
 
-Template variable introspection, dot-path variable resolver (unresolvable ⇒ manual
-entry), Day-N mapping settings UI, deploy + polling, NetBox `PATCH status=active` only
-on verified success; `partial_success` job state.
+**Goal:** wizard steps 4–5 work end-to-end: pick a Day-N template, variables auto-filled
+from NetBox via the dot-path mapping, manual entry for the rest, deploy + task polling,
+NetBox devices set `active` only on verified success, job summary.
+
+**Affected files:**
+- `app/db/models.py` + migration `0005` — `DayNMapping` (variable → dot-path),
+  `Job.dayn_template_id`, `JobDevice.dayn_variables` (JSON incl. manual flags)
+- `app/services/dayn.py` — `resolve_path` (dot-path over the NetBox device object:
+  fields, custom_fields, config_context), `resolve_variables` (unresolvable ⇒ manual),
+  `run_dayn`: per-device isolated deploy → task poll (5 s / 30 min, `isError` +
+  `failureReason`, task-tree drill when the reason is empty per §11) → NetBox
+  `PATCH status=active` **only** on verified success; PATCH failure ⇒ device
+  `activate_failed` and job `partial_success`
+- `app/clients/catalyst.py` — `get_template` (variable definitions),
+  `deploy_template` (deploy/v2), `get_task`, `get_task_tree`
+- `app/clients/netbox.py` — `get_device` (full object for resolution)
+- `app/api/settings.py` — `GET/PUT /api/settings/dayn` (replace-all mapping list)
+- `app/api/wizard.py` — `POST /jobs/{id}/dayn/prepare` (introspect + resolve +
+  persist variables), `POST /jobs/{id}/dayn/deploy` (validates required manual values,
+  BackgroundTask); the SSE endpoint already covers `dayn_running`
+- Frontend — `SettingsDayN.tsx` (variable↔dot-path editor), wizard step 4 (template
+  pick → variable review with read-only resolved values + required manual inputs →
+  deploy with live progress) and step 5 summary (per-device outcome, completed /
+  partial_success banner)
+
+**Payload caution (§4):** template-list/`templateParams`/deploy-v2/task shapes follow
+the §6 baseline + common CCC 2.3.7 payloads; verify against live fixtures before
+production use.
+
+**Test plan:** resolver unit tests (nested paths, custom_fields, config_context,
+missing ⇒ manual); Day-N service via respx (deploy success + activate, task `isError`
+with task-tree drill, NetBox PATCH failure ⇒ `partial_success`,
+never-activate-on-failure, per-device isolation); settings-dayn API round-trip;
+prepare/deploy API validation; vitest for the mapping editor and wizard steps 4–5.
+
+**Checklist:**
+- [x] Backend + tests green (86 pytest; new: resolver, Day-N settings round-trip,
+      prepare/deploy validation, full deploy + activate, task-tree drill,
+      PATCH-failure ⇒ partial_success, never-activate-on-failure)
+- [x] Frontend + tests green (19 vitest)
+- [x] Demo note
+
+**Demo:** headless-browser run of the complete wizard (steps 1→5) against mock
+CCC/NetBox/ISE: after Day-0, picked the Day-N template → "Resolve variables" filled
+`SNMP_LOCATION` from `device.custom_fields.snmp_location` (read-only) and flagged
+`CONTACT` as manual (deploy gated until filled) → deploy → task polled to success
+(3 polls) → step-5 summary "1 device(s) active in NetBox" and the mock NetBox received
+exactly one `PATCH {"status": "active"}`. Job statuses `completed` / `partial_success`
+/ `dayn_failed` verified in unit tests.
 
 ## P6 — Stats & logs ☐
 

@@ -188,3 +188,26 @@ class CatalystCenterClient:
         response = await self._get("/dna/intent/api/v1/template-programmer/template")
         body = response.json()
         return list(body) if isinstance(body, list) else list(body.get("response", []))
+
+    async def get_template(self, template_id: str) -> dict[str, Any]:
+        """Single template incl. variable definitions (templateParams)."""
+        response = await self._get(f"/dna/intent/api/v1/template-programmer/template/{template_id}")
+        return dict(response.json())
+
+    async def deploy_template(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST deploy/v2 (§6.1); returns a task. Not retried (not idempotent)."""
+        response = await self._request(
+            "POST", "/dna/intent/api/v1/template-programmer/template/deploy/v2", json=payload
+        )
+        return dict(response.json())
+
+    async def get_task(self, task_id: str) -> dict[str, Any]:
+        response = await self._get(f"/dna/intent/api/v1/task/{task_id}")
+        body = response.json()
+        return dict(body.get("response", body))
+
+    async def get_task_tree(self, task_id: str) -> list[dict[str, Any]]:
+        """Child tasks — §11: claim/deploy errors are often buried here."""
+        response = await self._get(f"/dna/intent/api/v1/task/{task_id}/tree")
+        body = response.json()
+        return list(body.get("response", body if isinstance(body, list) else []))

@@ -169,6 +169,80 @@ describe('Wizard', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Day-0 finished')
   })
 
+  it('runs Day-N: resolve variables, manual entry gating, deploy body', async () => {
+    const preparedJob = {
+      ...finishedJob,
+      devices: [
+        {
+          ...finishedJob.devices[0],
+          dayn_variables: {
+            SNMP_LOCATION: { value: 'Rack 1', source: 'mapped' },
+            CONTACT: { value: null, source: 'manual' },
+          },
+        },
+        finishedJob.devices[1],
+      ],
+    }
+    const doneJob = {
+      ...preparedJob,
+      status: 'completed',
+      devices: preparedJob.devices.map((d) =>
+        d.match_status === 'matched' ? { ...d, state: 'completed' } : d,
+      ),
+    }
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/wizard/jobs' && !init?.method)
+        return Promise.resolve(jsonResponse([finishedJob]))
+      if (url === '/api/wizard/day0/templates') return Promise.resolve(jsonResponse(templates))
+      if (url.endsWith('/dayn/prepare')) return Promise.resolve(jsonResponse(preparedJob))
+      if (url.endsWith('/dayn/deploy'))
+        return Promise.resolve(jsonResponse({ ...preparedJob, status: 'dayn_running' }))
+      if (url === '/api/wizard/jobs/7') return Promise.resolve(jsonResponse(doneJob))
+      return Promise.resolve(jsonResponse(finishedJob))
+    })
+    renderWizard()
+    await userEvent.click(await screen.findByRole('button', { name: 'Resume' }))
+    await userEvent.click(
+      await screen.findByRole('button', { name: /Continue to Day-N \(1 device/ }),
+    )
+
+    // Step 4: pick template, resolve, manual gating
+    await userEvent.selectOptions(await screen.findByLabelText(/Template/i), 'tmpl-1')
+    await userEvent.click(screen.getByRole('button', { name: 'Resolve variables' }))
+    expect(await screen.findByText('Rack 1')).toBeInTheDocument()
+    const deployButton = screen.getByRole('button', { name: /Deploy Day-N/ })
+    expect(deployButton).toBeDisabled()
+
+    await userEvent.type(screen.getByLabelText(/CONTACT \(manual\)/i), 'noc@example.com')
+    expect(deployButton).toBeEnabled()
+    await userEvent.click(deployButton)
+
+    const deployCall = fetchMock.mock.calls.find(([url]) =>
+      (url as string).endsWith('/dayn/deploy'),
+    )
+    const body = JSON.parse((deployCall![1] as RequestInit).body as string)
+    expect(body.template_id).toBe('tmpl-1')
+    expect(body.manual['71']).toEqual({ CONTACT: 'noc@example.com' })
+
+    // Polling fallback lands on the step-5 summary
+    expect(
+      await screen.findByText(/1 device\(s\) active in NetBox/, {}, { timeout: 4000 }),
+    ).toBeInTheDocument()
+  })
+
+  it('resumes a completed job directly into the summary', async () => {
+    const doneJob = { ...finishedJob, status: 'partial_success' }
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/wizard/jobs' && !init?.method)
+        return Promise.resolve(jsonResponse([doneJob]))
+      if (url === '/api/wizard/day0/templates') return Promise.resolve(jsonResponse(templates))
+      return Promise.resolve(jsonResponse(doneJob))
+    })
+    renderWizard()
+    await userEvent.click(await screen.findByRole('button', { name: 'Resume' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('partial success')
+  })
+
   it('filters the device table by serial', async () => {
     renderWizard()
     await userEvent.click(screen.getByRole('button', { name: 'Start new onboarding job' }))

@@ -80,6 +80,11 @@ class NetBoxClient:
             raise NetBoxError("NetBox /api/status/ did not return a version.")
         return str(version)
 
+    async def get_device(self, device_id: int) -> dict[str, Any]:
+        """Full device object (incl. custom_fields and config_context)."""
+        response = await self._get(f"/api/dcim/devices/{device_id}/")
+        return dict(response.json())
+
     async def get_devices(
         self, *, status: str | None = None, serial: str | None = None
     ) -> list[dict[str, Any]]:
