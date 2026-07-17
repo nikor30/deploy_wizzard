@@ -19,11 +19,11 @@ describe('App shell', () => {
 
   it('renders placeholder pages for unbuilt phases', () => {
     render(
-      <MemoryRouter initialEntries={['/settings/dayn']}>
+      <MemoryRouter initialEntries={['/stats']}>
         <App />
       </MemoryRouter>,
     )
-    expect(screen.getByRole('heading', { name: 'Day-N Variables' })).toBeInTheDocument()
-    expect(screen.getByText(/Coming in phase P5/)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Statistics' })).toBeInTheDocument()
+    expect(screen.getByText(/Coming in phase P6/)).toBeInTheDocument()
   })
 })

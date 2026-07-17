@@ -12,10 +12,11 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import Job, JobDevice, SiteMapping
+from app.db.models import DayNMapping, Job, JobDevice, SiteMapping
 from app.db.session import get_db, open_session
 from app.services.connections import get_catalyst_client, get_netbox_client
 from app.services.day0 import run_day0
+from app.services.dayn import MANUAL, resolve_variables, run_dayn
 from app.services.matching import MATCHED, SiteMappingLookup, match_serials
 
 router = APIRouter(prefix="/api/wizard", tags=["wizard"])
@@ -60,6 +61,7 @@ class JobDeviceOut(BaseModel):
     vlan_options: list[dict[str, Any]]
     state: str
     error: str | None
+    dayn_variables: dict[str, dict[str, Any]] | None
 
 
 class JobOut(BaseModel):
@@ -93,6 +95,7 @@ def _device_out(device: JobDevice) -> JobDeviceOut:
         vlan_options=device.vlan_options or [],
         state=device.state,
         error=device.error,
+        dayn_variables=device.dayn_variables,
     )
 
 
@@ -286,6 +289,106 @@ async def job_events(job_id: int, db: DbSession) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+class DayNPrepareRequest(BaseModel):
+    template_id: str
+
+
+class DayNDeployRequest(BaseModel):
+    template_id: str
+    # device_id -> {variable: manual value} for variables flagged as manual
+    manual: dict[int, dict[str, str]] = {}
+    poll_interval: float | None = None
+    task_timeout: float | None = None
+
+
+def _dayn_eligible(job: Job) -> list[JobDevice]:
+    """Day-N applies to devices that finished Day-0 successfully."""
+    return [d for d in job.devices if d.state in ("success", "dayn_failed", "activate_failed")]
+
+
+@router.post("/jobs/{job_id}/dayn/prepare")
+async def prepare_dayn(job_id: int, payload: DayNPrepareRequest, db: DbSession) -> JobOut:
+    """Introspect template variables and resolve them from NetBox per device."""
+    job = _get_job(db, job_id)
+    devices = _dayn_eligible(job)
+    if not devices:
+        raise HTTPException(status_code=422, detail="No Day-0-successful devices in this job.")
+
+    async with get_catalyst_client(db) as catalyst:
+        template = await catalyst.get_template(payload.template_id)
+    # templateParams shape per common CCC 2.3.7 payloads — verify live fixtures (§4).
+    variables = [
+        str(p.get("parameterName"))
+        for p in template.get("templateParams", [])
+        if p.get("parameterName")
+    ]
+
+    mappings = {m.variable: m.source_path for m in db.scalars(select(DayNMapping)).all()}
+    async with get_netbox_client(db) as netbox:
+        for device in devices:
+            context: dict[str, Any] = {"device": {}}
+            if device.netbox_device_id is not None:
+                context["device"] = await netbox.get_device(device.netbox_device_id)
+            device.dayn_variables = resolve_variables(variables, mappings, context)
+    job.dayn_template_id = payload.template_id
+    db.flush()
+    return _job_out(job)
+
+
+@router.post("/jobs/{job_id}/dayn/deploy")
+def deploy_dayn(
+    job_id: int, payload: DayNDeployRequest, background: BackgroundTasks, db: DbSession
+) -> JobOut:
+    """Start Day-N deployment; manual values must cover all unresolved variables."""
+    job = _get_job(db, job_id)
+    if job.status.endswith("_running"):
+        raise HTTPException(status_code=409, detail="A job phase is already running.")
+    devices = _dayn_eligible(job)
+    if not devices:
+        raise HTTPException(status_code=422, detail="No Day-0-successful devices in this job.")
+
+    device_params: dict[int, dict[str, str]] = {}
+    for device in devices:
+        resolved = device.dayn_variables or {}
+        manual_values = payload.manual.get(device.id, {})
+        params: dict[str, str] = {}
+        missing: list[str] = []
+        for variable, info in resolved.items():
+            if info.get("source") == MANUAL:
+                value = manual_values.get(variable)
+                if value is None or value == "":
+                    missing.append(variable)
+                else:
+                    params[variable] = value
+            else:
+                params[variable] = str(info.get("value"))
+        if missing:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Device {device.serial}: manual values required for "
+                f"{', '.join(sorted(missing))}.",
+            )
+        device_params[device.id] = params
+
+    job.status = "dayn_running"
+    job.current_step = 4
+    for device in devices:
+        device.state = "dayn_queued"
+        device.error = None
+    db.commit()  # release the write lock before the background task starts
+
+    kwargs: dict[str, Any] = {}
+    if payload.poll_interval is not None:
+        kwargs["poll_interval"] = payload.poll_interval
+    if payload.task_timeout is not None:
+        kwargs["task_timeout"] = payload.task_timeout
+    background.add_task(
+        run_dayn, job_id, template_id=payload.template_id, device_params=device_params, **kwargs
+    )
+    logger.info("Day-N started", extra={"job_id": job_id, "devices": len(device_params)})
+    return _job_out(job)
 
 
 @router.put("/jobs/{job_id}/devices/{device_id}")

@@ -24,6 +24,7 @@ class Job(Base):
     current_step: Mapped[int] = mapped_column(default=2)
     day0_config_id: Mapped[str | None] = mapped_column(String(64))
     day0_image_id: Mapped[str | None] = mapped_column(String(64))
+    dayn_template_id: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
@@ -59,8 +60,22 @@ class JobDevice(Base):
     error: Mapped[str | None] = mapped_column(String(2048))
     day0_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     day0_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dayn_variables: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
     job: Mapped[Job] = relationship(back_populates="devices")
+
+
+class DayNMapping(Base):
+    """Maps a CCC template variable to a NetBox dot-path expression."""
+
+    __tablename__ = "dayn_mappings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    variable: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    source_path: Mapped[str] = mapped_column(String(256))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
 
 
 class WebhookDelivery(Base):

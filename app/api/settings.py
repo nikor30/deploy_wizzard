@@ -5,12 +5,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.clients.catalyst import CatalystCenterClient
 from app.clients.netbox import NetBoxClient
 from app.crypto import mask_secret
-from app.db.models import ServiceSettings
+from app.db.models import DayNMapping, ServiceSettings
 from app.db.session import get_db
 from app.errors import PnPBridgeError
 from app.services import settings_store
@@ -129,6 +130,41 @@ async def test_catalyst(payload: TestRequest, db: DbSession) -> TestResult:
         logger.warning("Catalyst connection test failed: %s", exc.message)
         return TestResult(ok=False, detail=exc.message)
     return TestResult(ok=True, detail=f"Connected. {site_count} sites visible.")
+
+
+class DayNMappingItem(BaseModel):
+    variable: str
+    source_path: str
+
+
+class DayNMappingList(BaseModel):
+    mappings: list[DayNMappingItem]
+
+
+@router.get("/dayn")
+def get_dayn_mappings(db: DbSession) -> DayNMappingList:
+    rows = db.scalars(select(DayNMapping).order_by(DayNMapping.variable)).all()
+    return DayNMappingList(
+        mappings=[DayNMappingItem(variable=r.variable, source_path=r.source_path) for r in rows]
+    )
+
+
+@router.put("/dayn")
+def put_dayn_mappings(payload: DayNMappingList, db: DbSession) -> DayNMappingList:
+    """Replace the full variable-mapping table."""
+    seen: set[str] = set()
+    for item in payload.mappings:
+        if item.variable in seen:
+            raise HTTPException(
+                status_code=422, detail=f"Duplicate mapping for variable '{item.variable}'."
+            )
+        seen.add(item.variable)
+    db.execute(delete(DayNMapping))
+    for item in payload.mappings:
+        db.add(DayNMapping(variable=item.variable, source_path=item.source_path))
+    db.flush()
+    logger.info("Stored %d Day-N variable mappings", len(payload.mappings))
+    return get_dayn_mappings(db)
 
 
 @router.post("/credentials/netbox/test")
