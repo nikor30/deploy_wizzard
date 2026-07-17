@@ -61,8 +61,27 @@ class JobDevice(Base):
     day0_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     day0_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     dayn_variables: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    dayn_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dayn_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     job: Mapped[Job] = relationship(back_populates="devices")
+
+
+class LogEntry(Base):
+    """Structured log record persisted by the DB sink (context is redacted)."""
+
+    __tablename__ = "log_entries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, index=True
+    )
+    level: Mapped[str] = mapped_column(String(16), index=True)
+    component: Mapped[str] = mapped_column(String(128), index=True)
+    message: Mapped[str] = mapped_column(String(4096))
+    job_id: Mapped[int | None] = mapped_column(index=True)
+    device_serial: Mapped[str | None] = mapped_column(String(64), index=True)
+    context: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
 
 class DayNMapping(Base):

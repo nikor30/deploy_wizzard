@@ -8,6 +8,7 @@ empty; batches stay per-device isolated.
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from app.clients.catalyst import CatalystCenterClient
@@ -112,6 +113,10 @@ def _set_device(device_id: int, state: str, error: str | None = None) -> None:
         if device is not None:
             device.state = state
             device.error = error
+            if state == "dayn_deploying":
+                device.dayn_started_at = datetime.now(tz=UTC)
+            if state in ("dayn_failed", "activate_failed", "completed"):
+                device.dayn_finished_at = datetime.now(tz=UTC)
 
 
 async def _deploy_one(

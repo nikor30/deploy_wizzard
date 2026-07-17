@@ -1,8 +1,9 @@
 import { Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
-import Placeholder from './components/Placeholder'
 import SettingsCredentials from './pages/SettingsCredentials'
+import Logs from './pages/Logs'
 import SettingsDayN from './pages/SettingsDayN'
+import Stats from './pages/Stats'
 import SettingsMapping from './pages/SettingsMapping'
 import Wizard from './pages/Wizard'
 
@@ -14,8 +15,8 @@ export default function App() {
         <Route path="settings/credentials" element={<SettingsCredentials />} />
         <Route path="settings/mapping" element={<SettingsMapping />} />
         <Route path="settings/dayn" element={<SettingsDayN />} />
-        <Route path="stats" element={<Placeholder title="Statistics" phase="P6" />} />
-        <Route path="logs" element={<Placeholder title="Logs" phase="P6" />} />
+        <Route path="stats" element={<Stats />} />
+        <Route path="logs" element={<Logs />} />
       </Route>
     </Routes>
   )
