@@ -155,3 +155,36 @@ async def test_unexpected_pagination_shape_raises_typed_error() -> None:
     async with CatalystCenterClient(BASE, "admin", "pw") as client:
         with pytest.raises(CatalystError, match="Unexpected response shape"):
             await client.get_sites()
+
+
+@respx.mock
+async def test_pnp_list_uses_zero_based_offset() -> None:
+    """The PnP onboarding list is 0-based; a 1-based offset silently dropped
+    the first unclaimed device on live CCC (4 in the GUI, 3 in the wizard)."""
+    respx.post(TOKEN_URL).respond(200, json={"Token": "tok"})
+    pnp_route = respx.get(f"{BASE}/dna/intent/api/v1/onboarding/pnp-device")
+    pnp_route.side_effect = [
+        httpx.Response(
+            200,
+            json=[
+                {"id": f"pnp-{i}", "deviceInfo": {"serialNumber": f"SN{i}"}}
+                for i in range(PAGE_SIZE)
+            ],
+        ),
+        httpx.Response(200, json=[{"id": "pnp-last", "deviceInfo": {"serialNumber": "LAST"}}]),
+    ]
+    async with CatalystCenterClient(BASE, "admin", "pw") as client:
+        devices = await client.get_pnp_devices()
+    assert len(devices) == PAGE_SIZE + 1
+    first, second = (call.request.url.params for call in pnp_route.calls)
+    assert first["offset"] == "0"
+    assert second["offset"] == str(PAGE_SIZE)
+
+
+@respx.mock
+async def test_site_list_keeps_one_based_offset() -> None:
+    respx.post(TOKEN_URL).respond(200, json={"Token": "tok"})
+    site_route = respx.get(SITE_URL).respond(200, json=sites(1))
+    async with CatalystCenterClient(BASE, "admin", "pw") as client:
+        await client.get_sites()
+    assert site_route.calls[0].request.url.params["offset"] == "1"

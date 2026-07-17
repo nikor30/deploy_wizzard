@@ -140,11 +140,15 @@ class CatalystCenterClient:
         return await self._request("GET", path, params=params)
 
     async def _get_paginated(
-        self, path: str, params: dict[str, Any] | None = None
+        self, path: str, params: dict[str, Any] | None = None, *, first_offset: int = 1
     ) -> list[dict[str, Any]]:
-        """Collect all pages of an offset/limit-paginated list endpoint."""
+        """Collect all pages of an offset/limit-paginated list endpoint.
+
+        Offset bases differ per API family: /site is 1-based, the PnP
+        onboarding list is 0-based (a 1-based offset silently skips the
+        first device — seen on live CCC 2.3.7)."""
         items: list[dict[str, Any]] = []
-        offset = 1  # CCC list endpoints are 1-based
+        offset = first_offset
         while True:
             page_params: dict[str, Any] = dict(params or {})
             page_params.update({"limit": PAGE_SIZE, "offset": offset})
@@ -173,7 +177,9 @@ class CatalystCenterClient:
 
     async def get_pnp_devices(self, state: str = "Unclaimed") -> list[dict[str, Any]]:
         return await self._get_paginated(
-            "/dna/intent/api/v1/onboarding/pnp-device", params={"state": state}
+            "/dna/intent/api/v1/onboarding/pnp-device",
+            params={"state": state},
+            first_offset=0,
         )
 
     async def get_pnp_device(self, device_id: str) -> dict[str, Any]:
