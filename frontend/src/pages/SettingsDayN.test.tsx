@@ -45,3 +45,44 @@ describe('SettingsDayN', () => {
     expect(screen.queryByDisplayValue('SNMP_LOCATION')).not.toBeInTheDocument()
   })
 })
+
+describe('SettingsDayN suggestions', () => {
+  it('suggests paths for a template and keeps unmatched variables manual', async () => {
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/wizard/day0/templates')
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve([{ id: 'tpl-dayn', name: 'DayN Baseline', project: 'Baseline' }]),
+        })
+      if (url === '/api/settings/dayn/suggest' && init?.method === 'POST')
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve([
+              { variable: 'HOSTNAME', source_path: 'device.name', confidence: 0.9 },
+              { variable: 'RADIUS_KEY', source_path: null, confidence: 0 },
+            ]),
+        })
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(stored) })
+    })
+    render(<SettingsDayN />)
+    await screen.findByDisplayValue('SNMP_LOCATION')
+
+    await userEvent.selectOptions(screen.getByLabelText('Template for suggestions'), 'tpl-dayn')
+    await userEvent.click(screen.getByRole('button', { name: 'Suggest mappings' }))
+
+    expect(await screen.findByDisplayValue('device.name')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('HOSTNAME')).toBeInTheDocument()
+    expect(screen.getByText('suggested · 90%')).toBeInTheDocument()
+    // unmatched variable appears as a row with an empty path (manual entry)
+    expect(screen.getByDisplayValue('RADIUS_KEY')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Suggested 1 of 2')
+
+    const body = JSON.parse(
+      (fetchMock.mock.calls.find(([, i]) => i?.method === 'POST')![1] as RequestInit)
+        .body as string,
+    )
+    expect(body).toEqual({ template_id: 'tpl-dayn' })
+  })
+})

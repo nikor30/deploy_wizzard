@@ -5,6 +5,18 @@ interface DayNMapping {
   source_path: string
 }
 
+interface Template {
+  id: string
+  name: string
+  project: string | null
+}
+
+interface DayNSuggestion {
+  variable: string
+  source_path: string | null
+  confidence: number
+}
+
 interface Banner {
   ok: boolean
   detail: string
@@ -33,12 +45,60 @@ export default function SettingsDayN() {
   const [rows, setRows] = useState<DayNMapping[] | null>(null)
   const [banner, setBanner] = useState<Banner | null>(null)
   const [busy, setBusy] = useState(false)
+  const [templates, setTemplates] = useState<Template[]>([])
+  const [templateId, setTemplateId] = useState('')
+  const [suggesting, setSuggesting] = useState(false)
+  const [confidences, setConfidences] = useState<Record<string, number>>({})
 
   useEffect(() => {
     fetchJson<{ mappings: DayNMapping[] }>('/api/settings/dayn')
       .then((body) => setRows(body.mappings))
       .catch((err: Error) => setBanner({ ok: false, detail: err.message }))
+    fetchJson<Template[]>('/api/wizard/day0/templates')
+      .then((list) => setTemplates(Array.isArray(list) ? list : []))
+      .catch(() => setTemplates([])) // suggestions simply unavailable
   }, [])
+
+  const suggest = async () => {
+    setSuggesting(true)
+    setBanner(null)
+    try {
+      const suggestions = await fetchJson<DayNSuggestion[]>('/api/settings/dayn/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template_id: templateId }),
+      })
+      const nextConfidences: Record<string, number> = {}
+      setRows((prev) => {
+        const merged = [...(prev ?? [])]
+        for (const s of suggestions) {
+          const existing = merged.find((r) => r.variable === s.variable)
+          if (existing) {
+            if (!existing.source_path && s.source_path) {
+              existing.source_path = s.source_path
+              nextConfidences[s.variable] = s.confidence
+            }
+          } else {
+            merged.push({ variable: s.variable, source_path: s.source_path ?? '' })
+            if (s.source_path) nextConfidences[s.variable] = s.confidence
+          }
+        }
+        return merged
+      })
+      setConfidences((prev) => ({ ...prev, ...nextConfidences }))
+      const matched = suggestions.filter((s) => s.source_path).length
+      setBanner({
+        ok: true,
+        detail:
+          `Suggested ${matched} of ${suggestions.length} template variables — ` +
+          'review, correct where needed, then save. Empty paths stay manual entry.',
+      })
+    } catch (err) {
+      setBanner({ ok: false, detail: (err as Error).message })
+    } finally {
+      setSuggesting(false)
+    }
+  }
 
   const update = (index: number, patch: Partial<DayNMapping>) =>
     setRows((prev) => (prev ?? []).map((row, i) => (i === index ? { ...row, ...patch } : row)))
@@ -73,6 +133,44 @@ export default function SettingsDayN() {
         fields in wizard step 4.
       </p>
 
+      <section
+        aria-label="Suggest mappings"
+        className="mt-6 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
+      >
+        <h2 className="font-semibold">Pre-match from a template</h2>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+          Pick a CCC template and let PnP Bridge match its variables against your NetBox data
+          (fields, custom fields, config contexts). Review the suggestions, correct what does not
+          fit, then save.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <label className="block">
+            <span className="sr-only">Template for suggestions</span>
+            <select
+              className={inputClass + ' w-72'}
+              value={templateId}
+              onChange={(e) => setTemplateId(e.target.value)}
+            >
+              <option value="">— select template —</option>
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.project ? `${t.project} / ` : ''}
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
+            disabled={!templateId || suggesting}
+            onClick={() => void suggest()}
+          >
+            {suggesting ? 'Matching…' : 'Suggest mappings'}
+          </button>
+        </div>
+      </section>
+
       <div className="mt-6 flex flex-col gap-2">
         {rows === null && !banner && <p className="text-sm text-slate-400">Loading…</p>}
         {(rows ?? []).map((row, index) => (
@@ -92,6 +190,14 @@ export default function SettingsDayN() {
               value={row.source_path}
               onChange={(e) => update(index, { source_path: e.target.value })}
             />
+            {confidences[row.variable] !== undefined && (
+              <span
+                className="rounded bg-sky-100 px-1.5 py-0.5 text-xs whitespace-nowrap text-sky-800 dark:bg-sky-900/40 dark:text-sky-300"
+                title="Suggested automatically — review before saving"
+              >
+                suggested · {Math.round(confidences[row.variable] * 100)}%
+              </span>
+            )}
             <button
               type="button"
               className="text-rose-600 hover:underline dark:text-rose-400"

@@ -91,3 +91,51 @@ describe('SettingsMapping', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('NetBox is not configured.')
   })
 })
+
+describe('SettingsMapping suggestions', () => {
+  it('pre-fills suggested pairs with a confidence badge for review', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/mappings/sources/netbox') return Promise.resolve(jsonResponse(netboxSites))
+      if (url === '/api/mappings/sources/ccc') return Promise.resolve(jsonResponse(cccSites))
+      if (url === '/api/mappings/sites/suggest')
+        return Promise.resolve(
+          jsonResponse([
+            {
+              netbox_site_id: 1,
+              netbox_site_name: 'FFM-DC1',
+              ccc_site_id: 'uuid-1',
+              ccc_site_name: 'Global/Germany/Frankfurt/DC1',
+              confidence: 0.82,
+            },
+          ]),
+        )
+      return Promise.resolve(jsonResponse(storedMappings))
+    })
+    render(<SettingsMapping />)
+    await screen.findByRole('button', { name: /FFM-DC1/ })
+    await userEvent.click(screen.getByRole('button', { name: 'Suggest mappings' }))
+
+    expect(await screen.findByText('Mappings (2)')).toBeInTheDocument()
+    expect(screen.getByText('suggested · 82%')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Suggested 1 mapping(s)')
+    // the suggestion can be corrected: remove it again
+    await userEvent.click(screen.getAllByRole('button', { name: 'Remove' })[1])
+    expect(screen.getByText('Mappings (1)')).toBeInTheDocument()
+  })
+
+  it('reports when nothing can be pre-matched', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/mappings/sources/netbox') return Promise.resolve(jsonResponse(netboxSites))
+      if (url === '/api/mappings/sources/ccc') return Promise.resolve(jsonResponse(cccSites))
+      if (url === '/api/mappings/sites/suggest') return Promise.resolve(jsonResponse([]))
+      return Promise.resolve(jsonResponse(storedMappings))
+    })
+    render(<SettingsMapping />)
+    await screen.findByRole('button', { name: /FFM-DC1/ })
+    await userEvent.click(screen.getByRole('button', { name: 'Suggest mappings' }))
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('No confident matches'),
+    )
+    expect(screen.getByText('Mappings (1)')).toBeInTheDocument()
+  })
+})

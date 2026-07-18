@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.db.models import SiteMapping
 from app.db.session import get_db
 from app.services.connections import get_catalyst_client, get_netbox_client
+from app.services.suggest import suggest_site_mappings
 
 router = APIRouter(prefix="/api/mappings", tags=["mappings"])
 logger = logging.getLogger(__name__)
@@ -100,3 +101,35 @@ async def get_ccc_sites(db: DbSession) -> list[CccSite]:
         )
         for site in sites
     ]
+
+
+class SiteSuggestion(SiteMappingItem):
+    confidence: float
+
+
+@router.get("/sites/suggest")
+async def suggest_site_pairs(db: DbSession) -> list[SiteSuggestion]:
+    """Pre-match unmapped NetBox sites against the CCC hierarchy.
+
+    Suggestions are review material for the mapping page — nothing is saved
+    until the user confirms.
+    """
+    mapped_ids = set(db.scalars(select(SiteMapping.netbox_site_id)).all())
+    async with get_netbox_client(db) as netbox:
+        netbox_sites = await netbox.get_sites()
+    async with get_catalyst_client(db) as catalyst:
+        ccc_sites = await catalyst.get_sites()
+
+    unmapped = [s for s in netbox_sites if s["id"] not in mapped_ids]
+    suggestions = suggest_site_mappings(
+        [{"id": s["id"], "name": s.get("name", ""), "slug": s.get("slug")} for s in unmapped],
+        [
+            {
+                "id": s["id"],
+                "name_hierarchy": s.get("siteNameHierarchy") or s.get("name", ""),
+            }
+            for s in ccc_sites
+        ],
+    )
+    logger.info("Suggested %d of %d unmapped sites", len(suggestions), len(unmapped))
+    return [SiteSuggestion(**s) for s in suggestions]
