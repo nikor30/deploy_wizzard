@@ -401,3 +401,50 @@ verified), Day-N deployed with one manual variable, both NetBox devices
 `active`, plus the half-failed-batch and masked-secrets flows — 4/4 green in
 ~33 s. The same mock stack powers the integration suite, which also proves the
 5-request CCC rate limit under a 25-device batch.
+
+## Auto-suggest mappings (first-use effort reduction) ✅
+
+**Goal:** pre-match as much as possible so first-time setup is "review and
+correct" instead of "build from scratch": suggest NetBox↔CCC site pairs and
+Day-N variable→NetBox dot-path mappings with confidence scores.
+
+**Approach:** lightweight learned-heuristic matching (token normalization,
+Jaccard token overlap + sequence similarity + leaf weighting, synonym
+dictionary for network-engineering vocabulary, greedy unique assignment).
+No heavy ML dependency — deterministic, explainable scores, fully unit-tested.
+
+**Affected files**
+
+- `app/services/suggest.py` — `suggest_site_mappings()` (NetBox name/slug vs
+  CCC hierarchy leaf + full path, unique best assignment, confidence 0–1) and
+  `suggest_variable_mappings()` (template variables vs candidate dot-paths
+  discovered from a sample NetBox device: device fields, custom_fields.*,
+  config_context.*; synonym expansion hostname→name, ip→primary_ip4 …).
+- `app/api/mappings.py` — `GET /api/mappings/sites/suggest` (unmapped NetBox
+  sites only).
+- `app/api/settings.py` — `POST /api/settings/dayn/suggest` `{template_id}`.
+- `frontend/src/pages/SettingsMapping.tsx` — "Suggest mappings" button,
+  suggested rows flagged with confidence, user corrects then saves.
+- `frontend/src/pages/SettingsDayN.tsx` — template picker + "Suggest from
+  template", rows prefilled with suggested paths + confidence badges.
+
+**Test plan:** unit tests for normalization/scoring/assignment and variable
+suggestion (incl. synonyms, no-match threshold); API tests with respx; vitest
+for both settings pages; `make lint test` green.
+
+- [x] `app/services/suggest.py` + 7 unit tests (leaf match, abbreviations,
+  unique assignment, threshold, path discovery, synonyms, F1 tie-breaks)
+- [x] `GET /api/mappings/sites/suggest` + `POST /api/settings/dayn/suggest`
+  (3 API tests)
+- [x] Both settings pages: suggest buttons, confidence badges, review-first
+  flow (3 new vitest)
+- [x] Backend 126 pytest / frontend 31 vitest green, lint + mypy clean,
+  e2e suite 4/4 green
+
+**Demo:** on the mapping page, "Suggest mappings" pre-pairs the unmapped
+NetBox sites against the CCC hierarchy (e.g. `FFM-DC1 →
+Global/Germany/Frankfurt/DC1`, badge "suggested · 82%"); on the Day-N page,
+picking a template and hitting "Suggest mappings" fills `HOSTNAME →
+device.name`, `SNMP_LOCATION → device.custom_fields.snmp_location`, … and
+adds unmatched variables as empty rows for manual mapping. Nothing is saved
+until the user reviews and clicks Save.

@@ -15,6 +15,8 @@ from app.db.models import DayNMapping, ServiceSettings
 from app.db.session import get_db
 from app.errors import PnPBridgeError
 from app.services import settings_store
+from app.services.connections import get_catalyst_client, get_netbox_client
+from app.services.suggest import suggest_variable_mappings
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 logger = logging.getLogger(__name__)
@@ -179,3 +181,58 @@ async def test_netbox(payload: TestRequest, db: DbSession) -> TestResult:
         logger.warning("NetBox connection test failed: %s", exc.message)
         return TestResult(ok=False, detail=exc.message)
     return TestResult(ok=True, detail=f"Connected. NetBox {version}.")
+
+
+class DayNSuggestRequest(BaseModel):
+    template_id: str
+
+
+class DayNSuggestion(BaseModel):
+    variable: str
+    source_path: str | None
+    confidence: float
+
+
+@router.post("/dayn/suggest")
+async def suggest_dayn_mappings(payload: DayNSuggestRequest, db: DbSession) -> list[DayNSuggestion]:
+    """Pre-match a template's variables against NetBox data.
+
+    Uses a sample NetBox device (prefer status `planned`) to discover the
+    available fields, custom fields, and config-context keys. Suggestions are
+    review material for the Day-N settings page — nothing is saved here.
+    """
+    async with get_catalyst_client(db) as catalyst:
+        template = await catalyst.get_template(payload.template_id)
+    variables = [
+        str(p.get("parameterName"))
+        for p in template.get("templateParams", [])
+        if p.get("parameterName")
+    ]
+    if not variables:
+        return []
+
+    async with get_netbox_client(db) as netbox:
+        sample_devices = await netbox.get_devices(status="planned")
+        if not sample_devices:
+            sample_devices = await netbox.get_devices()
+    if not sample_devices:
+        raise HTTPException(
+            status_code=422,
+            detail="No NetBox device found to sample fields from - create at least one "
+            "device in NetBox first.",
+        )
+    suggestions = suggest_variable_mappings(variables, sample_devices[0])
+    logger.info(
+        "Suggested %d of %d Day-N variables for template %s",
+        sum(1 for s in suggestions.values() if s["source_path"]),
+        len(variables),
+        payload.template_id,
+    )
+    return [
+        DayNSuggestion(
+            variable=variable,
+            source_path=info["source_path"],
+            confidence=info["confidence"],
+        )
+        for variable, info in suggestions.items()
+    ]

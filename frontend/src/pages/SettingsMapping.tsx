@@ -18,6 +18,10 @@ interface SiteMapping {
   ccc_site_name: string
 }
 
+interface SiteSuggestion extends SiteMapping {
+  confidence: number
+}
+
 interface Banner {
   ok: boolean
   detail: string
@@ -72,7 +76,48 @@ export default function SettingsMapping() {
       .catch((err: Error) => setSourceError(err.message))
   }, [])
 
+  const [suggested, setSuggested] = useState<Record<number, number>>({})
+  const [suggesting, setSuggesting] = useState(false)
+
   const mappedNetboxIds = new Set(mappings.map((m) => m.netbox_site_id))
+
+  const suggest = async () => {
+    setSuggesting(true)
+    setBanner(null)
+    try {
+      const suggestions = await fetchJson<SiteSuggestion[]>('/api/mappings/sites/suggest')
+      if (suggestions.length === 0) {
+        setBanner({
+          ok: true,
+          detail: 'No confident matches for the remaining unmapped sites — pair them manually.',
+        })
+        return
+      }
+      setMappings((prev) => [
+        ...prev,
+        ...suggestions
+          .filter((s) => !prev.some((m) => m.netbox_site_id === s.netbox_site_id))
+          .map((s) => ({
+            netbox_site_id: s.netbox_site_id,
+            netbox_site_name: s.netbox_site_name,
+            ccc_site_id: s.ccc_site_id,
+            ccc_site_name: s.ccc_site_name,
+          })),
+      ])
+      setSuggested((prev) => ({
+        ...prev,
+        ...Object.fromEntries(suggestions.map((s) => [s.netbox_site_id, s.confidence])),
+      }))
+      setBanner({
+        ok: true,
+        detail: `Suggested ${suggestions.length} mapping(s) — review, correct, then save.`,
+      })
+    } catch (err) {
+      setBanner({ ok: false, detail: (err as Error).message })
+    } finally {
+      setSuggesting(false)
+    }
+  }
 
   const addMapping = (ccc: CccSite) => {
     if (!selectedNetbox) return
@@ -238,6 +283,20 @@ export default function SettingsMapping() {
         </section>
       </div>
 
+      <div className="mt-4">
+        <button
+          type="button"
+          className={actionButton}
+          disabled={suggesting || netboxSites === null || cccSites === null}
+          onClick={() => void suggest()}
+        >
+          {suggesting ? 'Matching…' : 'Suggest mappings'}
+        </button>
+        <span className="ml-3 text-sm text-slate-500 dark:text-slate-400">
+          Pre-matches unmapped NetBox sites against the CCC hierarchy — review before saving.
+        </span>
+      </div>
+
       <section className="mt-6" aria-label="Current mappings">
         <h2 className="font-semibold">Mappings ({mappings.length})</h2>
         <ul className="mt-2 flex flex-col gap-1">
@@ -250,6 +309,14 @@ export default function SettingsMapping() {
                 <strong>{m.netbox_site_name}</strong>
                 <span className="mx-2 text-slate-400">→</span>
                 {m.ccc_site_name}
+                {suggested[m.netbox_site_id] !== undefined && (
+                  <span
+                    className="ml-2 rounded bg-sky-100 px-1.5 py-0.5 text-xs whitespace-nowrap text-sky-800 dark:bg-sky-900/40 dark:text-sky-300"
+                    title="Suggested automatically — review before saving"
+                  >
+                    suggested · {Math.round(suggested[m.netbox_site_id] * 100)}%
+                  </span>
+                )}
               </span>
               <button
                 type="button"
