@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.clients.catalyst import CatalystCenterClient
 from app.clients.netbox import NetBoxClient
 from app.crypto import mask_secret
-from app.db.models import DayNMapping, ServiceSettings
+from app.db.models import DayNMapping, ServiceSettings, TemplateSecret
 from app.db.session import get_db
 from app.errors import PnPBridgeError
 from app.services import settings_store
@@ -221,7 +221,8 @@ async def suggest_dayn_mappings(payload: DayNSuggestRequest, db: DbSession) -> l
             detail="No NetBox device found to sample fields from - create at least one "
             "device in NetBox first.",
         )
-    suggestions = suggest_variable_mappings(variables, sample_devices[0])
+    secret_names = list(db.scalars(select(TemplateSecret.name)).all())
+    suggestions = suggest_variable_mappings(variables, sample_devices[0], secret_names=secret_names)
     logger.info(
         "Suggested %d of %d Day-N variables for template %s",
         sum(1 for s in suggestions.values() if s["source_path"]),
@@ -236,3 +237,54 @@ async def suggest_dayn_mappings(payload: DayNSuggestRequest, db: DbSession) -> l
         )
         for variable, info in suggestions.items()
     ]
+
+
+class TemplateSecretOut(BaseModel):
+    name: str
+    secret_masked: str
+
+
+class TemplateSecretIn(BaseModel):
+    secret: str = Field(min_length=1, max_length=1024)
+
+
+@router.get("/secrets")
+def list_template_secrets(db: DbSession) -> list[TemplateSecretOut]:
+    """Named template secrets, values masked — the plaintext is write-only."""
+    rows = db.scalars(select(TemplateSecret).order_by(TemplateSecret.name)).all()
+    box = settings_store.get_secret_box()
+    return [
+        TemplateSecretOut(
+            name=row.name,
+            secret_masked=mask_secret(box.decrypt(row.secret_encrypted)) or "****",
+        )
+        for row in rows
+    ]
+
+
+@router.put("/secrets/{name}")
+def upsert_template_secret(
+    name: str, payload: TemplateSecretIn, db: DbSession
+) -> TemplateSecretOut:
+    """Create or replace a template secret; usable as `secret.<name>` in
+    Day-N variable mappings."""
+    row = db.scalar(select(TemplateSecret).where(TemplateSecret.name == name))
+    encrypted = settings_store.get_secret_box().encrypt(payload.secret)
+    if row is None:
+        row = TemplateSecret(name=name, secret_encrypted=encrypted)
+        db.add(row)
+    else:
+        row.secret_encrypted = encrypted
+    db.flush()
+    logger.info("Stored template secret", extra={"secret_name": name})
+    return TemplateSecretOut(name=name, secret_masked=mask_secret(payload.secret) or "****")
+
+
+@router.delete("/secrets/{name}", status_code=204)
+def delete_template_secret(name: str, db: DbSession) -> None:
+    row = db.scalar(select(TemplateSecret).where(TemplateSecret.name == name))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No template secret named '{name}'.")
+    db.delete(row)
+    db.flush()
+    logger.info("Deleted template secret", extra={"secret_name": name})

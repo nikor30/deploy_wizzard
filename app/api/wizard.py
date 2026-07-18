@@ -12,12 +12,13 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import DayNMapping, Job, JobDevice, SiteMapping
+from app.db.models import DayNMapping, Job, JobDevice, SiteMapping, TemplateSecret
 from app.db.session import get_db, open_session
 from app.services.connections import get_catalyst_client, get_netbox_client
 from app.services.day0 import run_day0
-from app.services.dayn import MANUAL, resolve_variables, run_dayn
+from app.services.dayn import MANUAL, SECRET, resolve_variables, run_dayn
 from app.services.matching import MATCHED, SiteMappingLookup, match_serials
+from app.services.settings_store import get_secret_box
 
 router = APIRouter(prefix="/api/wizard", tags=["wizard"])
 logger = logging.getLogger(__name__)
@@ -362,12 +363,15 @@ async def prepare_dayn(job_id: int, payload: DayNPrepareRequest, db: DbSession) 
     ]
 
     mappings = {m.variable: m.source_path for m in db.scalars(select(DayNMapping)).all()}
+    secret_names = set(db.scalars(select(TemplateSecret.name)).all())
     async with get_netbox_client(db) as netbox:
         for device in devices:
             context: dict[str, Any] = {"device": {}}
             if device.netbox_device_id is not None:
                 context["device"] = await netbox.get_device(device.netbox_device_id)
-            device.dayn_variables = resolve_variables(variables, mappings, context)
+            device.dayn_variables = resolve_variables(
+                variables, mappings, context, secret_names=secret_names
+            )
     job.dayn_template_id = payload.template_id
     db.flush()
     return _job_out(job)
@@ -398,6 +402,19 @@ def deploy_dayn(
                     missing.append(variable)
                 else:
                     params[variable] = value
+            elif info.get("source") == SECRET:
+                # decrypt just-in-time; the plaintext only ever enters the
+                # CCC deploy payload, never the job record or a response
+                name = str(info.get("secret"))
+                row = db.scalar(select(TemplateSecret).where(TemplateSecret.name == name))
+                if row is None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Device {device.serial}: template secret '{name}' no longer "
+                        "exists - re-add it under Settings -> Day-N Variables or re-run "
+                        "'Resolve variables'.",
+                    )
+                params[variable] = get_secret_box().decrypt(row.secret_encrypted)
             else:
                 params[variable] = str(info.get("value"))
         if missing:

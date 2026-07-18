@@ -30,7 +30,10 @@ interface JobDevice {
   vlan_options: VlanOption[]
   state: string
   error: string | null
-  dayn_variables: Record<string, { value: string | null; source: 'mapped' | 'manual' }> | null
+  dayn_variables: Record<
+    string,
+    { value: string | null; source: 'mapped' | 'manual' | 'secret' }
+  > | null
 }
 
 interface Job {
