@@ -18,6 +18,10 @@ app/static/
 *.sqlite
 .env
 
+# Playwright
+test-results/
+playwright-report/
+
 # Editors
 .idea/
 .vscode/

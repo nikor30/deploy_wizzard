@@ -14,8 +14,10 @@ test:
 	uv run pytest
 	cd frontend && npm run test
 
-e2e:
-	@echo "Playwright e2e suite lands in P7 (see PLAN.md)"; exit 1
+e2e:  ## Playwright suite: built SPA + app on :8061 + mock CCC/NetBox/ISE on :9100
+	cd frontend && npm run build
+	npm install --no-audit --no-fund
+	npx playwright test
 
 build:
 	cd frontend && npm run build

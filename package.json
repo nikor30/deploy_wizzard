@@ -1,0 +1,8 @@
+{
+  "name": "pnp-bridge-e2e",
+  "private": true,
+  "description": "Repo-root harness for the Playwright e2e suite (tests/e2e)",
+  "devDependencies": {
+    "@playwright/test": "1.55.0"
+  }
+}

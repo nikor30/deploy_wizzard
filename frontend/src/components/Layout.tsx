@@ -23,19 +23,19 @@ function linkClass({ isActive }: { isActive: boolean }): string {
 
 export default function Layout() {
   return (
-    <div className="flex min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-      <aside className="flex w-60 shrink-0 flex-col border-r border-slate-200 bg-white px-4 py-6 dark:border-slate-800 dark:bg-slate-900">
-        <div className="mb-8 px-3">
+    <div className="flex min-h-screen flex-col bg-slate-50 text-slate-900 md:flex-row dark:bg-slate-950 dark:text-slate-100">
+      <aside className="flex w-full shrink-0 flex-col border-b border-slate-200 bg-white px-4 py-4 md:w-60 md:border-r md:border-b-0 md:py-6 dark:border-slate-800 dark:bg-slate-900">
+        <div className="mb-4 px-3 md:mb-8">
           <span className="text-lg font-bold tracking-tight">PnP Bridge</span>
           <p className="text-xs text-slate-500 dark:text-slate-400">NetBox ↔ Catalyst Center</p>
         </div>
-        <nav className="flex flex-1 flex-col gap-1" aria-label="Main">
+        <nav className="flex flex-1 flex-row flex-wrap gap-1 md:flex-col" aria-label="Main">
           {navigation.map((item) => (
             <NavLink key={item.to} to={item.to} end={item.end} className={linkClass}>
               {item.label}
             </NavLink>
           ))}
-          <p className="mt-6 mb-1 px-3 text-xs font-semibold tracking-wider text-slate-400 uppercase dark:text-slate-500">
+          <p className="mt-6 mb-1 hidden px-3 text-xs font-semibold tracking-wider text-slate-400 uppercase md:block dark:text-slate-500">
             Settings
           </p>
           {settingsNav.map((item) => (
@@ -45,7 +45,7 @@ export default function Layout() {
           ))}
         </nav>
       </aside>
-      <main className="min-w-0 flex-1 px-8 py-8">
+      <main className="min-w-0 flex-1 px-4 py-6 md:px-8 md:py-8">
         <Outlet />
       </main>
     </div>
