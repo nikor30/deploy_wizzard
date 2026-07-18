@@ -491,3 +491,41 @@ map `RADIUS_KEY → secret.radius_key` (also auto-suggested), deploy: the CCC
 deploy/v2 payload carries the plaintext, while the wizard, job record, API
 responses, and logs only ever contain `****` — verified by test asserting the
 plaintext appears in exactly one place (the captured CCC request).
+
+## NetBox as full source of truth: location hierarchy + uplink/network context ✅
+
+**Feedback:** mapping only covers top-level NetBox sites, but NetBox has a
+sub-hierarchy (locations: buildings, floors) mirroring the CCC hierarchy; and
+Day-N provisioning needs the switch's uplink/port details, IP/network, and
+VLAN pulled from NetBox — everything to deploy a switch comes from NetBox.
+
+- **Location-aware site mapping:** `SiteMapping` gains optional
+  `netbox_location_id/name` (migration 0008). Mapping sources list sites AND
+  their location tree as paths ("FFM-DC1 / Building A / Floor 2"). Matching
+  resolves a device's CCC target by walking device.location → parent
+  locations → site, most specific mapped level wins. Suggestions cover
+  locations too.
+- **Richer Day-N context:** `NetBoxClient.get_locations()` and
+  `get_interfaces(device_id)`; `build_device_context()` enriches the device
+  with `device.uplinks.0.{name,type,peer_device,peer_interface}` (cabled,
+  non-mgmt interfaces), `device.interfaces`, and `device.mgmt.{address,ip,
+  netmask,prefix_length,network,cidr}` computed from primary/mgmt IP.
+  Suggestion candidates include the new paths.
+- AES keys/passwords: already covered by template secrets (`secret.<name>`).
+
+**Test plan:** unit (location-walk resolution, context builder, candidate
+paths), respx client tests, mappings/suggest API tests with locations, mock
+stack gains locations + interfaces, frontend mapping page composite keys,
+full suites green.
+
+- [x] Migration 0008, location-aware `SiteMapping`, parent-walk resolution
+- [x] Sources list sites + location tree paths; mapping UI on composite keys
+- [x] `get_locations()`/`get_interfaces()`; `build_device_context()` with
+  `device.uplinks.*` and `device.mgmt.*`; suggestion candidates extended
+- [x] Mock stack: locations + interfaces; 141 pytest / 33 vitest / 4 e2e green
+
+**Demo:** map "FFM-DC1 / Building A" to a CCC building node — a device located
+on "Floor 1" (child of Building A) resolves to that node via the parent walk,
+while devices without a location keep using the site-level mapping. Day-N
+variables can now use e.g. `device.uplinks.0.name`, `device.uplinks.0.peer_device`,
+`device.mgmt.netmask`, `device.mgmt.network` — all suggested automatically.

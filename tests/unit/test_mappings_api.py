@@ -73,10 +73,15 @@ def test_netbox_sources_use_stored_credentials(
         200,
         json={"results": [{"id": 1, "name": "FFM-DC1", "slug": "ffm-dc1"}], "next": None},
     )
+    respx_mock.get("https://netbox.example.com/api/dcim/locations/").respond(
+        200, json={"results": [], "next": None}
+    )
     _store_credentials(client)
     response = client.get("/api/mappings/sources/netbox")
     assert response.status_code == 200
-    assert response.json() == [{"id": 1, "name": "FFM-DC1", "slug": "ffm-dc1"}]
+    assert response.json() == [
+        {"site_id": 1, "location_id": None, "name": "FFM-DC1", "slug": "ffm-dc1"}
+    ]
     assert route.calls[0].request.headers["Authorization"] == "Token tok"
 
 

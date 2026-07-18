@@ -7,6 +7,7 @@ empty; batches stay per-device isolated.
 """
 
 import asyncio
+import ipaddress
 import logging
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -79,6 +80,54 @@ def resolve_variables(
             "source": MAPPED if value is not None else MANUAL,
         }
     return result
+
+
+def build_device_context(
+    device: dict[str, Any], interfaces: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Variable-resolution context: the NetBox device enriched with uplink/
+    port details and computed management-network facts, so dot-paths like
+    `device.uplinks.0.peer_device` or `device.mgmt.netmask` resolve.
+
+    Uplinks = cabled, non-management interfaces; peer data comes from
+    NetBox `connected_endpoints` when present (verify against live fixtures).
+    """
+    ctx = dict(device)
+    ctx["interfaces"] = interfaces or []
+    uplinks: list[dict[str, Any]] = []
+    for iface in interfaces or []:
+        if iface.get("mgmt_only"):
+            continue
+        endpoints = iface.get("connected_endpoints") or []
+        if not endpoints and not iface.get("cable"):
+            continue
+        peer = endpoints[0] if endpoints else {}
+        uplinks.append(
+            {
+                "name": iface.get("name"),
+                "type": (iface.get("type") or {}).get("value"),
+                "description": iface.get("description"),
+                "peer_device": (peer.get("device") or {}).get("name"),
+                "peer_interface": peer.get("name"),
+            }
+        )
+    ctx["uplinks"] = uplinks
+    address = (device.get("primary_ip4") or {}).get("address")
+    if address:
+        try:
+            interface = ipaddress.ip_interface(str(address))
+        except ValueError:
+            pass
+        else:
+            ctx["mgmt"] = {
+                "address": str(address),
+                "ip": str(interface.ip),
+                "netmask": str(interface.network.netmask),
+                "prefix_length": interface.network.prefixlen,
+                "network": str(interface.network.network_address),
+                "cidr": str(interface.network),
+            }
+    return {"device": ctx}
 
 
 def build_deploy_payload(

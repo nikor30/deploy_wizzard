@@ -133,8 +133,11 @@ class SiteMapping(Base):
     __tablename__ = "site_mappings"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    netbox_site_id: Mapped[int] = mapped_column(unique=True, index=True)
+    netbox_site_id: Mapped[int] = mapped_column(index=True)
     netbox_site_name: Mapped[str] = mapped_column(String(256))
+    # optional NetBox location (building/floor …) below the site; None = whole site
+    netbox_location_id: Mapped[int | None] = mapped_column(index=True)
+    netbox_location_name: Mapped[str | None] = mapped_column(String(256))
     ccc_site_id: Mapped[str] = mapped_column(String(64))
     ccc_site_name: Mapped[str] = mapped_column(String(512))
     updated_at: Mapped[datetime] = mapped_column(

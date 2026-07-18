@@ -147,6 +147,9 @@ def test_site_suggestions_endpoint_skips_already_mapped(client: TestClient) -> N
                 ]
             },
         )
+        respx_mock.get(f"{NETBOX}/api/dcim/locations/").respond(
+            200, json={"results": [], "next": None}
+        )
         respx_mock.get(f"{NETBOX}/api/dcim/sites/").respond(
             200,
             json={

@@ -135,10 +135,13 @@ def candidate_paths(device: dict[str, Any]) -> list[str]:
     primary = device.get("primary_ip4")
     if isinstance(primary, dict) and primary.get("address"):
         paths.append("device.primary_ip4.address")
-    for container in ("custom_fields", "config_context"):
+    for container in ("custom_fields", "config_context", "mgmt"):
         data = device.get(container)
         if isinstance(data, dict):
             paths.extend(_flatten(f"device.{container}", data, depth=3))
+    uplinks = device.get("uplinks")
+    if isinstance(uplinks, list) and uplinks and isinstance(uplinks[0], dict):
+        paths.extend(_flatten("device.uplinks.0", uplinks[0], depth=2))
     return paths
 
 

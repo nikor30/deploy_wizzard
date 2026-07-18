@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import SettingsMapping from './SettingsMapping'
 
 const netboxSites = [
-  { id: 1, name: 'FFM-DC1', slug: 'ffm-dc1' },
-  { id: 2, name: 'BER-DC1', slug: 'ber-dc1' },
+  { site_id: 1, location_id: null, name: 'FFM-DC1', slug: 'ffm-dc1' },
+  { site_id: 2, location_id: null, name: 'BER-DC1', slug: 'ber-dc1' },
 ]
 
 const cccSites = [
@@ -62,12 +62,17 @@ describe('SettingsMapping', () => {
     expect(putCall).toBeDefined()
     const body = JSON.parse((putCall![1] as RequestInit).body as string)
     expect(body.mappings).toHaveLength(2)
-    expect(body.mappings).toContainEqual({
-      netbox_site_id: 1,
-      netbox_site_name: 'FFM-DC1',
-      ccc_site_id: 'uuid-1',
-      ccc_site_name: 'Global/Germany/Frankfurt/DC1',
-    })
+    expect(body.mappings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          netbox_site_id: 1,
+          netbox_site_name: 'FFM-DC1',
+          netbox_location_id: null,
+          ccc_site_id: 'uuid-1',
+          ccc_site_name: 'Global/Germany/Frankfurt/DC1',
+        }),
+      ]),
+    )
   })
 
   it('removes a mapping', async () => {
@@ -137,5 +142,43 @@ describe('SettingsMapping suggestions', () => {
       expect(screen.getByRole('status')).toHaveTextContent('No confident matches'),
     )
     expect(screen.getByText('Mappings (1)')).toBeInTheDocument()
+  })
+})
+
+describe('SettingsMapping locations', () => {
+  it('pairs a sub-location with a CCC node independently of its site', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/mappings/sources/netbox')
+        return Promise.resolve(
+          jsonResponse([
+            { site_id: 1, location_id: null, name: 'FFM-DC1', slug: 'ffm-dc1' },
+            {
+              site_id: 1,
+              location_id: 100,
+              name: 'FFM-DC1 / Building A',
+              slug: 'building-a',
+            },
+          ]),
+        )
+      if (url === '/api/mappings/sources/ccc') return Promise.resolve(jsonResponse(cccSites))
+      return Promise.resolve(jsonResponse({ mappings: [] }))
+    })
+    render(<SettingsMapping />)
+    await userEvent.click(await screen.findByRole('button', { name: /Building A/ }))
+    await userEvent.click(screen.getByRole('button', { name: 'Global/Germany/Frankfurt/DC1' }))
+    expect(screen.getByText('Mappings (1)')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save mappings' }))
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT')
+      expect(putCall).toBeDefined()
+      const body = JSON.parse((putCall![1] as RequestInit).body as string)
+      expect(body.mappings[0]).toMatchObject({
+        netbox_site_id: 1,
+        netbox_location_id: 100,
+        netbox_location_name: 'FFM-DC1 / Building A',
+        ccc_site_id: 'uuid-1',
+      })
+    })
   })
 })

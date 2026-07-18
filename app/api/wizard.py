@@ -16,7 +16,13 @@ from app.db.models import DayNMapping, Job, JobDevice, SiteMapping, TemplateSecr
 from app.db.session import get_db, open_session
 from app.services.connections import get_catalyst_client, get_netbox_client
 from app.services.day0 import run_day0
-from app.services.dayn import MANUAL, SECRET, resolve_variables, run_dayn
+from app.services.dayn import (
+    MANUAL,
+    SECRET,
+    build_device_context,
+    resolve_variables,
+    run_dayn,
+)
 from app.services.matching import MATCHED, SiteMappingLookup, match_serials
 from app.services.settings_store import get_secret_box
 
@@ -209,11 +215,19 @@ async def match_job(job_id: int, db: DbSession) -> JobOut:
     """Run NetBox matching for all devices of the job and persist the results."""
     job = _get_job(db, job_id)
     mappings: SiteMappingLookup = {
-        m.netbox_site_id: (m.ccc_site_id, m.ccc_site_name)
+        (m.netbox_site_id, m.netbox_location_id): (m.ccc_site_id, m.ccc_site_name)
         for m in db.scalars(select(SiteMapping)).all()
     }
     async with get_netbox_client(db) as netbox:
-        results = await match_serials([d.serial for d in job.devices], netbox, mappings)
+        location_parents: dict[int, int | None] = {}
+        if any(location_id is not None for (_site, location_id) in mappings):
+            location_parents = {
+                loc["id"]: (loc.get("parent") or {}).get("id")
+                for loc in await netbox.get_locations()
+            }
+        results = await match_serials(
+            [d.serial for d in job.devices], netbox, mappings, location_parents
+        )
     by_serial = {r.serial: r for r in results}
     for device in job.devices:
         result = by_serial[device.serial]
@@ -368,7 +382,9 @@ async def prepare_dayn(job_id: int, payload: DayNPrepareRequest, db: DbSession) 
         for device in devices:
             context: dict[str, Any] = {"device": {}}
             if device.netbox_device_id is not None:
-                context["device"] = await netbox.get_device(device.netbox_device_id)
+                netbox_device = await netbox.get_device(device.netbox_device_id)
+                interfaces = await netbox.get_interfaces(device.netbox_device_id)
+                context = build_device_context(netbox_device, interfaces)
             device.dayn_variables = resolve_variables(
                 variables, mappings, context, secret_names=secret_names
             )
