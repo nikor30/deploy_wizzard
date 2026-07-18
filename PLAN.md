@@ -340,7 +340,64 @@ could not be removed.
 - [x] 4 new vitest cases (re-run refetches `/match`, back navigation, delete,
   delete disabled while running)
 
-## P7 — Hardening ☐
+## P7 — Hardening ✅
 
-Playwright e2e suite, polling load tests, failure injection (401/429/5xx, timeouts,
-half-failed batches), a11y + mobile pass, docs/runbook, image slimming, SECURITY.md.
+**Goal:** the tool is provably robust end-to-end: real clients/services run against
+mock CCC/NetBox/ISE servers (integration + e2e), every documented failure mode is
+injected and asserted, the container is hardened, and operations are documented.
+
+**Affected files**
+
+- `tests/mocks/` — `ccc.py`, `netbox.py`, `ise.py`, `stack.py`: small FastAPI apps
+  mimicking live CCC 2.3.7 (token auth, bare-array 0-based PnP list, site-claim,
+  templates, deploy/v2, task + task-tree) and NetBox v4 (devices, sites, VLANs,
+  status PATCH), plus an ISE webhook sink. One combined app (`stack.py`) mounts them
+  under `/ccc`, `/netbox`, `/ise` with `/__mock__/` control endpoints for seeding,
+  failure injection (auth 401, flaky 5xx, PnP onboarding error, task `isError` with
+  empty `failureReason` → task tree, webhook 500, NetBox PATCH 500) and a
+  concurrency high-water-mark counter (asserts the 5-request CCC semaphore).
+  Runnable standalone: `python -m tests.mocks.stack --port 9100`.
+- `tests/integration/` — real app (TestClient) + real clients against the mock stack
+  over real HTTP: full happy path Step 1→5, half-failed batch ⇒ `day0_partial` with
+  sibling isolation, Day-N task error drilled from the task tree, webhook 500 does
+  not roll back the claim, NetBox PATCH failure after Day-N success ⇒
+  `partial_success`, CCC 5xx retry through the stack, and a 25-device polling load
+  test (all succeed, CCC concurrency never exceeds 5).
+- `tests/e2e/*.spec.ts` + `frontend/playwright.config.ts` — Playwright against the
+  built SPA served by uvicorn + mock stack (auto-started via `webServer`): settings
+  round-trip with masked secrets, complete wizard run with resume-after-reload and
+  Day-N manual entry, mobile-viewport smoke.
+- `Containerfile` + `.containerignore` — non-root user, HEALTHCHECK on
+  `/api/health`, slimmer context/image.
+- `docs/runbook.md`, `SECURITY.md`, `Makefile` (`e2e` target), `compose.yaml`
+  (mock stack service for the e2e/demo profile).
+
+**Test plan:** `make lint test` green (new integration suite included), `make e2e`
+green locally, container still builds.
+
+- [x] Mock CCC/NetBox/ISE stack (`tests/mocks/`) with failure injection +
+  concurrency stats; runnable standalone for demos
+- [x] Integration suite (7 tests): happy path 1→5, half-failed batch isolation,
+  task-tree drilling, webhook 500, NetBox PATCH failure ⇒ `partial_success`,
+  5xx retry, 25-device load test (semaphore ≤ 5, shared token)
+- [x] Playwright e2e (4 tests, `make e2e`, own CI job): full wizard run with
+  resume-after-reload + Day-N manual entry, half-failed batch, settings
+  round-trip with masked secrets, mobile smoke
+- [x] Mobile layout fix: sidebar becomes a top nav bar below `md`
+- [x] Container hardening: non-root user (uid 10001), HEALTHCHECK,
+  `.dockerignore`
+- [x] `docs/runbook.md` + `SECURITY.md`
+- [x] Backend 116 pytest green, frontend 28 vitest green, lint clean
+
+**Notes:** e2e switched from the originally planned compose stack to Playwright
+`webServer` (app :8061 + mock stack :9100 as local processes) — simpler, works
+identically in CI, CLAUDE.md updated. The e2e harness lives in a root
+`package.json` because specs in `tests/e2e/` cannot resolve modules from
+`frontend/node_modules`.
+
+**Demo:** `make e2e` boots the full stack and drives the browser through the
+entire wizard: 2 devices claimed against the mock CCC (HMAC-signed ISE webhooks
+verified), Day-N deployed with one manual variable, both NetBox devices
+`active`, plus the half-failed-batch and masked-secrets flows — 4/4 green in
+~33 s. The same mock stack powers the integration suite, which also proves the
+5-request CCC rate limit under a 25-device batch.

@@ -1,4 +1,8 @@
-# Dev convenience stack. Mock CCC/NetBox servers join here in P1/P3.
+# Dev convenience stack for the app container.
+# For a full demo/e2e environment run the mock CCC/NetBox/ISE stack on the
+# host:  uv run python -m tests.mocks.stack --port 9100
+# and point Settings → Credentials at http://host.containers.internal:9100/{ccc,netbox,ise}.
+# The Playwright suite (make e2e) starts app + mocks itself.
 services:
   app:
     build:

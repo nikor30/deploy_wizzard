@@ -78,7 +78,7 @@ on **port 8060**.
 │   ├── unit/                  # pure logic, mocked HTTP (respx)
 │   ├── integration/           # against mock CCC/NetBox FastAPI servers in tests/mocks/
 │   ├── mocks/                 # recorded/representative CCC + NetBox JSON fixtures
-│   └── e2e/                   # Playwright against compose stack
+│   └── e2e/                   # Playwright specs + serve scripts (app + mock stack)
 └── docs/                      # API notes, screenshots, runbook
 ```
 
@@ -268,7 +268,8 @@ Each phase ends with: all tests green, lint clean, a working `make image && podm
   full happy path Step 1 → 5 and key failure paths (claim task `isError`, webhook 500,
   NetBox PATCH failure after successful Day-N ⇒ job ends in `partial_success`).
 - **Frontend:** vitest + RTL for wizard state machine, settings forms, mapping UI.
-- **E2E:** Playwright against `compose.yaml` (app + mocks): complete wizard run, resume
+- **E2E:** Playwright (config at repo root; `webServer` auto-starts the app on :8061
+  and the mock stack on :9100): complete wizard run, resume
   after reload, manual-entry flow, settings round-trip with masked secrets.
 - **Rule:** every bug fix ships with a regression test. Every PR: `make lint test` green.
 
@@ -280,7 +281,7 @@ Each phase ends with: all tests green, lint clean, a working `make image && podm
 make dev        # uvicorn --reload on :8060 + vite dev server (proxied)
 make lint       # ruff check + ruff format --check + mypy + eslint
 make test       # pytest (unit+integration) + vitest
-make e2e        # playwright suite against compose stack
+make e2e        # playwright suite (auto-starts app :8061 + mock CCC/NetBox/ISE :9100)
 make image      # podman build -t pnp-bridge:dev -f Containerfile .
 make run        # podman run --rm -p 8060:8060 -e PNPB_SECRET_KEY=... -v pnpb-data:/data pnp-bridge:dev
 ```
