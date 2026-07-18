@@ -15,9 +15,11 @@ podman run -d --name pnpb \
 - To supply your own key instead: `-e PNPB_SECRET_KEY=<fernet key>`
   (generate one with
   `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`).
-- The container runs as uid 10001 (non-root). With a **bind mount** instead of
-  a named volume, make the host directory writable for that uid
-  (`chown 10001 <dir>` or podman's `--userns=keep-id`); SELinux hosts need `:Z`.
+- The app runs as uid 10001 (non-root). The entrypoint starts as root only to
+  repair `/data` ownership (covers volumes created by pre-1.2 root containers
+  and root-owned bind mounts) and immediately drops privileges. If you run with
+  `--user 10001` yourself, the repair is skipped — then the mount must already
+  be writable for that uid. SELinux hosts need `:Z` on bind mounts.
 - Optional env vars: `PNPB_DB_PATH` (default `/data/pnpb.sqlite`),
   `PNPB_LOG_LEVEL` (default `INFO`), `PNPB_PORT` (default `8060`).
 
@@ -73,6 +75,7 @@ podman volume import pnpb-data pnpb-backup.tar       # restore (container stoppe
 | Day-0 ok but ISE not updated | webhook delivery failed | Logs page → retry the delivery; claims are never rolled back for webhook failures |
 | Device stuck `provisioning`, then timeout | device never reached `Provisioned` in CCC | check the device console/PnP state in CCC; re-run the job for that device |
 | Job ends `partial_success` | Day-N succeeded but the NetBox PATCH failed | set the device `active` in NetBox manually; the config on the device is fine |
+| No GUI / container exits after upgrading an old volume | pre-1.3.1 image + root-owned `/data` | upgrade to >= 1.3.1 (entrypoint repairs ownership automatically) |
 | Container unhealthy right after start | migrations still running on a big DB | wait for `start-period` (15 s); check `podman logs pnpb` |
 | "no space left" / DB locked errors | volume full or two instances sharing one DB | free space; never run two app instances against the same SQLite file |
 

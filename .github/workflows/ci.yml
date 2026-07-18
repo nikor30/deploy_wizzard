@@ -98,3 +98,22 @@ jobs:
           done
           docker logs pnpb
           exit 1
+      - name: "Regression: volume from a pre-1.2 root container still works"
+        run: |
+          # Simulate a /data volume written by the old root-running container:
+          # root-owned secret.key that uid 10001 cannot read without the
+          # entrypoint's ownership repair.
+          docker volume create pnpb-old
+          docker run --rm --user 0 -v pnpb-old:/data --entrypoint python pnp-bridge:ci \
+            -c "from cryptography.fernet import Fernet; import os; \
+                open('/data/secret.key','wb').write(Fernet.generate_key()); \
+                os.chmod('/data/secret.key', 0o600)"
+          docker run -d -p 8062:8060 --name pnpb-old -v pnpb-old:/data pnp-bridge:ci
+          ok=""
+          for i in $(seq 1 15); do
+            if curl -fsS http://localhost:8062/api/health; then ok=1; break; fi
+            sleep 2
+          done
+          if [ -z "$ok" ]; then docker logs pnpb-old; exit 1; fi
+          # and the app must still run as the non-root user after the repair
+          docker exec pnpb-old grep -q '^Uid:.*10001' /proc/1/status

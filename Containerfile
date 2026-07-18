@@ -19,11 +19,14 @@ RUN pip install .
 
 COPY --from=frontend /build/dist/ ./app/static/
 
-# Run as a dedicated non-root user; /data holds the DB + auto-generated key.
+# The app runs as a dedicated non-root user (uid 10001). The entrypoint starts
+# as root only to repair /data ownership (volumes from pre-1.2 root containers)
+# and immediately drops privileges; `--user 10001` also works for fresh volumes.
+COPY entrypoint.sh /entrypoint.sh
 RUN useradd --system --uid 10001 --no-create-home pnpb \
     && mkdir /data \
-    && chown pnpb:pnpb /data
-USER pnpb
+    && chown pnpb:pnpb /data \
+    && chmod +x /entrypoint.sh
 VOLUME /data
 ENV PNPB_DB_PATH=/data/pnpb.sqlite
 EXPOSE 8060
@@ -31,4 +34,4 @@ EXPOSE 8060
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8060/api/health', timeout=4)"]
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8060"]
+CMD ["/entrypoint.sh"]
