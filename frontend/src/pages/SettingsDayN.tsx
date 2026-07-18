@@ -17,6 +17,11 @@ interface DayNSuggestion {
   confidence: number
 }
 
+interface TemplateSecret {
+  name: string
+  secret_masked: string
+}
+
 interface Banner {
   ok: boolean
   detail: string
@@ -50,6 +55,11 @@ export default function SettingsDayN() {
   const [suggesting, setSuggesting] = useState(false)
   const [confidences, setConfidences] = useState<Record<string, number>>({})
 
+  const [secrets, setSecrets] = useState<TemplateSecret[]>([])
+  const [newSecretName, setNewSecretName] = useState('')
+  const [newSecretValue, setNewSecretValue] = useState('')
+  const [secretBusy, setSecretBusy] = useState(false)
+
   useEffect(() => {
     fetchJson<{ mappings: DayNMapping[] }>('/api/settings/dayn')
       .then((body) => setRows(body.mappings))
@@ -57,7 +67,49 @@ export default function SettingsDayN() {
     fetchJson<Template[]>('/api/wizard/day0/templates')
       .then((list) => setTemplates(Array.isArray(list) ? list : []))
       .catch(() => setTemplates([])) // suggestions simply unavailable
+    fetchJson<TemplateSecret[]>('/api/settings/secrets')
+      .then((list) => setSecrets(Array.isArray(list) ? list : []))
+      .catch((err: Error) => setBanner({ ok: false, detail: err.message }))
   }, [])
+
+  const addSecret = async () => {
+    setSecretBusy(true)
+    setBanner(null)
+    try {
+      const saved = await fetchJson<TemplateSecret>(
+        `/api/settings/secrets/${encodeURIComponent(newSecretName.trim())}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ secret: newSecretValue }),
+        },
+      )
+      setSecrets((prev) => [...prev.filter((s) => s.name !== saved.name), saved])
+      setNewSecretName('')
+      setNewSecretValue('')
+      setBanner({
+        ok: true,
+        detail: `Secret '${saved.name}' stored — map it as secret.${saved.name}`,
+      })
+    } catch (err) {
+      setBanner({ ok: false, detail: (err as Error).message })
+    } finally {
+      setSecretBusy(false)
+    }
+  }
+
+  const deleteSecret = async (name: string) => {
+    setBanner(null)
+    try {
+      const res = await fetch(`/api/settings/secrets/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setSecrets((prev) => prev.filter((s) => s.name !== name))
+    } catch (err) {
+      setBanner({ ok: false, detail: (err as Error).message })
+    }
+  }
 
   const suggest = async () => {
     setSuggesting(true)
@@ -132,6 +184,67 @@ export default function SettingsDayN() {
         <code>device.config_context.ntp.servers.0</code>. Unmapped variables become manual input
         fields in wizard step 4.
       </p>
+
+      <section
+        aria-label="Template secrets"
+        className="mt-6 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
+      >
+        <h2 className="font-semibold">Template secrets</h2>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+          Store keys and passwords (RADIUS/TACACS keys, SNMP communities, AES keys, …) encrypted
+          here and map them to template variables as <code>secret.&lt;name&gt;</code>. Values are
+          write-only: they show up masked everywhere and are only decrypted for the deploy call to
+          Catalyst Center.
+        </p>
+        <ul className="mt-3 flex flex-col gap-1">
+          {secrets.map((s) => (
+            <li
+              key={s.name}
+              className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2 text-sm dark:border-slate-800"
+            >
+              <span>
+                <code className="font-mono">secret.{s.name}</code>
+                <span className="ml-3 text-slate-400">{s.secret_masked}</span>
+              </span>
+              <button
+                type="button"
+                className="text-rose-600 hover:underline dark:text-rose-400"
+                onClick={() => void deleteSecret(s.name)}
+              >
+                Delete
+              </button>
+            </li>
+          ))}
+          {secrets.length === 0 && (
+            <li className="text-sm text-slate-400">No template secrets stored yet.</li>
+          )}
+        </ul>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <input
+            aria-label="Secret name"
+            className={inputClass + ' w-56 font-mono'}
+            placeholder="radius_key"
+            value={newSecretName}
+            onChange={(e) => setNewSecretName(e.target.value)}
+          />
+          <input
+            aria-label="Secret value"
+            type="password"
+            className={inputClass + ' w-72'}
+            placeholder="value (write-only)"
+            value={newSecretValue}
+            onChange={(e) => setNewSecretValue(e.target.value)}
+          />
+          <button
+            type="button"
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
+            disabled={!newSecretName.trim() || !newSecretValue || secretBusy}
+            onClick={() => void addSecret()}
+          >
+            {secretBusy ? 'Storing…' : 'Store secret'}
+          </button>
+        </div>
+      </section>
 
       <section
         aria-label="Suggest mappings"

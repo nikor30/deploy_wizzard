@@ -8,6 +8,7 @@ empty; batches stay per-device isolated.
 
 import asyncio
 import logging
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -24,6 +25,9 @@ TASK_TIMEOUT_SECONDS = 30 * 60
 
 MANUAL = "manual"
 MAPPED = "mapped"
+SECRET = "secret"
+SECRET_PREFIX = "secret."
+SECRET_MASK = "****"
 
 
 def resolve_path(context: dict[str, Any], path: str) -> str | None:
@@ -50,12 +54,25 @@ def resolve_variables(
     variables: list[str],
     mappings: dict[str, str],
     context: dict[str, Any],
+    secret_names: Iterable[str] = (),
 ) -> dict[str, dict[str, Any]]:
     """Resolve each template variable via its mapping; anything that cannot be
-    resolved is flagged for manual entry in the wizard."""
+    resolved is flagged for manual entry in the wizard.
+
+    `secret.<NAME>` paths resolve to a masked placeholder — the plaintext is
+    decrypted just-in-time when building the deploy payload, never stored on
+    the job or returned by the API."""
+    known_secrets = set(secret_names)
     result: dict[str, dict[str, Any]] = {}
     for variable in variables:
         path = mappings.get(variable)
+        if path and path.startswith(SECRET_PREFIX):
+            name = path.removeprefix(SECRET_PREFIX)
+            if name in known_secrets:
+                result[variable] = {"value": SECRET_MASK, "source": SECRET, "secret": name}
+            else:
+                result[variable] = {"value": None, "source": MANUAL}
+            continue
         value = resolve_path(context, path) if path else None
         result[variable] = {
             "value": value,

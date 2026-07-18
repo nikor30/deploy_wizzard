@@ -97,6 +97,21 @@ class DayNMapping(Base):
     )
 
 
+class TemplateSecret(Base):
+    """Named secret (RADIUS key, SNMP community, …) usable as a Day-N
+    template variable via a `secret.<NAME>` source path. Value is Fernet-
+    encrypted at rest and write-only in the API."""
+
+    __tablename__ = "template_secrets"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    secret_encrypted: Mapped[str] = mapped_column(String(2048))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
 class WebhookDelivery(Base):
     """Outcome of one outbound ISE webhook delivery (retryable from the UI in P6)."""
 

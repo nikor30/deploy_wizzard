@@ -448,3 +448,46 @@ picking a template and hitting "Suggest mappings" fills `HOSTNAME →
 device.name`, `SNMP_LOCATION → device.custom_fields.snmp_location`, … and
 adds unmatched variables as empty rows for manual mapping. Nothing is saved
 until the user reviews and clicks Save.
+
+## Template secrets (encrypted variable sources) ✅
+
+**Goal:** store named secrets (RADIUS/TACACS keys, SNMP communities, local
+passwords, AES keys …) encrypted in Settings and use them as Day-N template
+variables via `secret.<NAME>` source paths — without the value ever appearing
+in the UI, job records, logs, or API responses. Only the deploy call to CCC
+receives the plaintext.
+
+**Affected files**
+
+- `app/db/models.py` + migration `0007_template_secrets` — `TemplateSecret`
+  (unique name, Fernet-encrypted value).
+- `app/api/settings.py` — `GET /api/settings/secrets` (masked),
+  `PUT /api/settings/secrets/{name}` (write-only upsert),
+  `DELETE /api/settings/secrets/{name}`.
+- `app/services/dayn.py` — resolver understands `secret.<NAME>` paths:
+  resolves to `{"value": "****", "source": "secret", "secret": NAME}` (never
+  the plaintext); unknown secret name ⇒ manual entry.
+- `app/api/wizard.py` — prepare passes stored secret names; deploy decrypts
+  secret-sourced params just-in-time for the CCC payload.
+- `app/services/suggest.py` + suggest endpoint — secret names join the
+  candidate pool (`RADIUS_KEY → secret.radius_key`).
+- `frontend/src/pages/SettingsDayN.tsx` — "Template secrets" card: masked
+  list, add (name + value), delete; wizard step 4 shows `****` read-only.
+
+**Test plan:** resolver unit tests (secret path, unknown name, masking),
+secrets API round-trip (masked list, upsert, delete, value never echoed),
+deploy test asserting plaintext reaches the CCC payload while job/API keep
+`****`, suggestion test, vitest for the secrets card. `make lint test` green.
+
+- [x] Model + migration 0007, masked write-only API (PUT/GET/DELETE)
+- [x] Resolver `secret.<NAME>` support (masked placeholder; unknown ⇒ manual)
+- [x] Deploy-time just-in-time decryption; deleted secret ⇒ actionable 422
+- [x] Suggestion engine includes secret names (`RADIUS_KEY → secret.radius_key`)
+- [x] Settings → Day-N "Template secrets" card (masked list, add, delete)
+- [x] 7 new pytest + 1 vitest; 133 pytest / 32 vitest / 4 e2e green
+
+**Demo:** store `radius_key` on the Day-N page (value shows as `****-123`),
+map `RADIUS_KEY → secret.radius_key` (also auto-suggested), deploy: the CCC
+deploy/v2 payload carries the plaintext, while the wizard, job record, API
+responses, and logs only ever contain `****` — verified by test asserting the
+plaintext appears in exactly one place (the captured CCC request).

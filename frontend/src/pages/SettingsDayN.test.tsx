@@ -86,3 +86,46 @@ describe('SettingsDayN suggestions', () => {
     expect(body).toEqual({ template_id: 'tpl-dayn' })
   })
 })
+
+describe('SettingsDayN template secrets', () => {
+  it('lists masked secrets, stores a new one, and deletes', async () => {
+    let secrets = [{ name: 'radius_key', secret_masked: '****-123' }]
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/settings/secrets')
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(secrets) })
+      if (url === '/api/settings/secrets/tacacs_key' && init?.method === 'PUT')
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ name: 'tacacs_key', secret_masked: '****cs99' }),
+        })
+      if (url === '/api/settings/secrets/radius_key' && init?.method === 'DELETE') {
+        secrets = []
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(null) })
+      }
+      if (url === '/api/wizard/day0/templates')
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) })
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(stored) })
+    })
+    render(<SettingsDayN />)
+
+    expect(await screen.findByText('secret.radius_key')).toBeInTheDocument()
+    expect(screen.getByText('****-123')).toBeInTheDocument()
+
+    await userEvent.type(screen.getByLabelText('Secret name'), 'tacacs_key')
+    await userEvent.type(screen.getByLabelText('Secret value'), 'tacacs99')
+    await userEvent.click(screen.getByRole('button', { name: 'Store secret' }))
+    expect(await screen.findByText('secret.tacacs_key')).toBeInTheDocument()
+    expect(screen.getByText('****cs99')).toBeInTheDocument()
+    // the plaintext never renders anywhere
+    expect(screen.queryByText(/tacacs99/)).not.toBeInTheDocument()
+    const putCall = fetchMock.mock.calls.find(
+      ([u, i]) => u === '/api/settings/secrets/tacacs_key' && i?.method === 'PUT',
+    )
+    expect(JSON.parse((putCall![1] as RequestInit).body as string)).toEqual({
+      secret: 'tacacs99',
+    })
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0])
+    await waitFor(() => expect(screen.queryByText('secret.radius_key')).not.toBeInTheDocument())
+  })
+})

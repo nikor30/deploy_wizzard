@@ -8,6 +8,7 @@ confidence; the UI presents them for review — they are never auto-saved.
 """
 
 import re
+from collections.abc import Iterable
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -169,12 +170,18 @@ def _expand(tokens: list[str]) -> list[str]:
 def suggest_variable_mappings(
     variables: list[str],
     device: dict[str, Any],
+    secret_names: Iterable[str] = (),
 ) -> dict[str, dict[str, Any]]:
-    """Best dot-path per template variable, or None below VARIABLE_THRESHOLD."""
+    """Best dot-path per template variable, or None below VARIABLE_THRESHOLD.
+
+    Stored template secrets join the candidate pool as `secret.<name>`."""
     candidates = [
         (path, _tokens(path.removeprefix("device."), drop_stopwords=False))
         for path in candidate_paths(device)
     ]
+    candidates.extend(
+        (f"secret.{name}", _tokens(name, drop_stopwords=False)) for name in secret_names
+    )
     result: dict[str, dict[str, Any]] = {}
     for variable in variables:
         raw_tokens = _tokens(variable, drop_stopwords=False)
