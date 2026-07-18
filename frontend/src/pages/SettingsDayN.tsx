@@ -42,8 +42,9 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+// no width here — each usage sets its own (w-56 / w-72 / flex-1)
 const inputClass =
-  'block w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm ' +
+  'block rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm ' +
   'focus:border-sky-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900'
 
 export default function SettingsDayN() {
