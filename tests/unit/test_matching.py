@@ -39,7 +39,7 @@ def nb_device(
     }
 
 
-MAPPING: SiteMappingLookup = {10: ("uuid-ffm", "Global/Germany/Frankfurt/DC1")}
+MAPPING: SiteMappingLookup = {(10, None): ("uuid-ffm", "Global/Germany/Frankfurt/DC1")}
 
 
 def mock_planned(devices: list[dict[str, Any]]) -> None:

@@ -98,6 +98,14 @@ class NetBoxClient:
     async def get_sites(self) -> list[dict[str, Any]]:
         return await self._get_paginated("/api/dcim/sites/")
 
+    async def get_locations(self) -> list[dict[str, Any]]:
+        """Location hierarchy (buildings/floors …) below the sites."""
+        return await self._get_paginated("/api/dcim/locations/")
+
+    async def get_interfaces(self, device_id: int) -> list[dict[str, Any]]:
+        """All interfaces of a device (uplink/port details for Day-N)."""
+        return await self._get_paginated("/api/dcim/interfaces/", params={"device_id": device_id})
+
     async def get_vlans(self, site_id: int) -> list[dict[str, Any]]:
         return await self._get_paginated("/api/ipam/vlans/", params={"site_id": site_id})
 

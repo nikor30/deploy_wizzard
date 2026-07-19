@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 
+// A mappable NetBox target: a site, or a location (building/floor) below one.
 interface NetBoxSite {
-  id: number
+  site_id: number
+  location_id: number | null
   name: string
   slug: string | null
 }
@@ -14,9 +16,14 @@ interface CccSite {
 interface SiteMapping {
   netbox_site_id: number
   netbox_site_name: string
+  netbox_location_id?: number | null
+  netbox_location_name?: string | null
   ccc_site_id: string
   ccc_site_name: string
 }
+
+const mappingKey = (siteId: number, locationId: number | null | undefined) =>
+  `${siteId}:${locationId ?? ''}`
 
 interface SiteSuggestion extends SiteMapping {
   confidence: number
@@ -76,10 +83,12 @@ export default function SettingsMapping() {
       .catch((err: Error) => setSourceError(err.message))
   }, [])
 
-  const [suggested, setSuggested] = useState<Record<number, number>>({})
+  const [suggested, setSuggested] = useState<Record<string, number>>({})
   const [suggesting, setSuggesting] = useState(false)
 
-  const mappedNetboxIds = new Set(mappings.map((m) => m.netbox_site_id))
+  const mappedNetboxIds = new Set(
+    mappings.map((m) => mappingKey(m.netbox_site_id, m.netbox_location_id)),
+  )
 
   const suggest = async () => {
     setSuggesting(true)
@@ -96,17 +105,31 @@ export default function SettingsMapping() {
       setMappings((prev) => [
         ...prev,
         ...suggestions
-          .filter((s) => !prev.some((m) => m.netbox_site_id === s.netbox_site_id))
+          .filter(
+            (s) =>
+              !prev.some(
+                (m) =>
+                  mappingKey(m.netbox_site_id, m.netbox_location_id) ===
+                  mappingKey(s.netbox_site_id, s.netbox_location_id),
+              ),
+          )
           .map((s) => ({
             netbox_site_id: s.netbox_site_id,
             netbox_site_name: s.netbox_site_name,
+            netbox_location_id: s.netbox_location_id,
+            netbox_location_name: s.netbox_location_name,
             ccc_site_id: s.ccc_site_id,
             ccc_site_name: s.ccc_site_name,
           })),
       ])
       setSuggested((prev) => ({
         ...prev,
-        ...Object.fromEntries(suggestions.map((s) => [s.netbox_site_id, s.confidence])),
+        ...Object.fromEntries(
+          suggestions.map((s) => [
+            mappingKey(s.netbox_site_id, s.netbox_location_id),
+            s.confidence,
+          ]),
+        ),
       }))
       setBanner({
         ok: true,
@@ -121,11 +144,14 @@ export default function SettingsMapping() {
 
   const addMapping = (ccc: CccSite) => {
     if (!selectedNetbox) return
+    const key = mappingKey(selectedNetbox.site_id, selectedNetbox.location_id)
     setMappings((prev) => [
-      ...prev.filter((m) => m.netbox_site_id !== selectedNetbox.id),
+      ...prev.filter((m) => mappingKey(m.netbox_site_id, m.netbox_location_id) !== key),
       {
-        netbox_site_id: selectedNetbox.id,
+        netbox_site_id: selectedNetbox.site_id,
         netbox_site_name: selectedNetbox.name,
+        netbox_location_id: selectedNetbox.location_id,
+        netbox_location_name: selectedNetbox.location_id !== null ? selectedNetbox.name : null,
         ccc_site_id: ccc.id,
         ccc_site_name: ccc.name_hierarchy,
       },
@@ -133,8 +159,10 @@ export default function SettingsMapping() {
     setSelectedNetbox(null)
   }
 
-  const removeMapping = (netboxSiteId: number) =>
-    setMappings((prev) => prev.filter((m) => m.netbox_site_id !== netboxSiteId))
+  const removeMapping = (key: string) =>
+    setMappings((prev) =>
+      prev.filter((m) => mappingKey(m.netbox_site_id, m.netbox_location_id) !== key),
+    )
 
   const save = async () => {
     setBusy(true)
@@ -226,17 +254,19 @@ export default function SettingsMapping() {
               <li className="text-sm text-slate-400">Loading…</li>
             )}
             {filteredNetbox.map((site) => (
-              <li key={site.id}>
+              <li key={mappingKey(site.site_id, site.location_id)}>
                 <button
                   type="button"
                   className={listButtonClass(
-                    selectedNetbox?.id === site.id,
-                    mappedNetboxIds.has(site.id),
+                    selectedNetbox !== null &&
+                      mappingKey(selectedNetbox.site_id, selectedNetbox.location_id) ===
+                        mappingKey(site.site_id, site.location_id),
+                    mappedNetboxIds.has(mappingKey(site.site_id, site.location_id)),
                   )}
                   onClick={() => setSelectedNetbox(site)}
                 >
                   {site.name}
-                  {!mappedNetboxIds.has(site.id) && (
+                  {!mappedNetboxIds.has(mappingKey(site.site_id, site.location_id)) && (
                     <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
                       unmapped
                     </span>
@@ -302,26 +332,30 @@ export default function SettingsMapping() {
         <ul className="mt-2 flex flex-col gap-1">
           {mappings.map((m) => (
             <li
-              key={m.netbox_site_id}
+              key={mappingKey(m.netbox_site_id, m.netbox_location_id)}
               className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-900"
             >
               <span className="truncate">
                 <strong>{m.netbox_site_name}</strong>
                 <span className="mx-2 text-slate-400">→</span>
                 {m.ccc_site_name}
-                {suggested[m.netbox_site_id] !== undefined && (
+                {suggested[mappingKey(m.netbox_site_id, m.netbox_location_id)] !== undefined && (
                   <span
                     className="ml-2 rounded bg-sky-100 px-1.5 py-0.5 text-xs whitespace-nowrap text-sky-800 dark:bg-sky-900/40 dark:text-sky-300"
                     title="Suggested automatically — review before saving"
                   >
-                    suggested · {Math.round(suggested[m.netbox_site_id] * 100)}%
+                    suggested ·{' '}
+                    {Math.round(
+                      suggested[mappingKey(m.netbox_site_id, m.netbox_location_id)] * 100,
+                    )}
+                    %
                   </span>
                 )}
               </span>
               <button
                 type="button"
                 className="ml-3 text-rose-600 hover:underline dark:text-rose-400"
-                onClick={() => removeMapping(m.netbox_site_id)}
+                onClick={() => removeMapping(mappingKey(m.netbox_site_id, m.netbox_location_id))}
               >
                 Remove
               </button>

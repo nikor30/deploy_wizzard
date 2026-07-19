@@ -223,6 +223,10 @@ Retries: 3× exponential backoff; delivery status stored per event and retryable
   management interface IP (`/api/ipam/ip-addresses/?device_id=<id>`, interface named
   `mgmt*`/`Vlan*` — make the lookup strategy configurable).
 - **VLANs for site:** `GET /api/ipam/vlans/?site_id=<id>&limit=0`.
+- **Locations (site sub-hierarchy):** `GET /api/dcim/locations/` (id, name, site,
+  parent) — used for location-aware site mapping (building/floor level).
+- **Interfaces:** `GET /api/dcim/interfaces/?device_id=<id>` — uplink/port details
+  for Day-N variables (`connected_endpoints`, `cable`, `mgmt_only`).
 - **Config contexts / custom fields:** available on the device object; usable as Day-N
   variable sources.
 - **Activate:** `PATCH /api/dcim/devices/<id>/` with `{"status": "active"}`.

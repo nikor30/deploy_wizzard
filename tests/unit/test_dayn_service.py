@@ -55,6 +55,9 @@ def _mock_prepare(respx_mock: respx.MockRouter) -> None:
         },
     )
     respx_mock.get(f"{NETBOX}/api/dcim/devices/1/").respond(200, json=_nb_detail(1))
+    respx_mock.get(f"{NETBOX}/api/dcim/interfaces/").respond(
+        200, json={"results": [], "next": None}
+    )
     respx_mock.get(f"{NETBOX}/api/dcim/devices/2/").respond(200, json=_nb_detail(2))
 
 

@@ -58,6 +58,67 @@ def create_netbox_app() -> FastAPI:
             device["status"] = {"value": payload["status"]}
         return device
 
+    @app.get("/api/dcim/locations/")
+    def locations(request: Request) -> dict[str, Any]:
+        _check_token(request)
+        return _page(
+            [
+                {
+                    "id": 100,
+                    "name": "Building A",
+                    "slug": "building-a",
+                    "site": {"id": NETBOX_SITE_ID, "name": NETBOX_SITE_NAME},
+                    "parent": None,
+                },
+                {
+                    "id": 101,
+                    "name": "Floor 1",
+                    "slug": "floor-1",
+                    "site": {"id": NETBOX_SITE_ID, "name": NETBOX_SITE_NAME},
+                    "parent": {"id": 100, "name": "Building A"},
+                },
+            ]
+        )
+
+    @app.get("/api/dcim/interfaces/")
+    def interfaces(request: Request, device_id: int | None = None) -> dict[str, Any]:
+        _check_token(request)
+        if device_id not in STATE.netbox_devices:
+            return _page([])
+        return _page(
+            [
+                {
+                    "id": device_id * 10 + 1,
+                    "name": "TenGigabitEthernet1/1/1",
+                    "type": {"value": "10gbase-x-sfpp"},
+                    "mgmt_only": False,
+                    "description": "uplink to distribution",
+                    "cable": {"id": 7},
+                    "connected_endpoints": [
+                        {"name": "TenGigabitEthernet1/0/24", "device": {"name": "dist-ffm-01"}}
+                    ],
+                },
+                {
+                    "id": device_id * 10 + 2,
+                    "name": "GigabitEthernet1/0/1",
+                    "type": {"value": "1000base-t"},
+                    "mgmt_only": False,
+                    "description": "",
+                    "cable": None,
+                    "connected_endpoints": [],
+                },
+                {
+                    "id": device_id * 10 + 3,
+                    "name": "GigabitEthernet0/0",
+                    "type": {"value": "1000base-t"},
+                    "mgmt_only": True,
+                    "description": "oob mgmt",
+                    "cable": {"id": 8},
+                    "connected_endpoints": [],
+                },
+            ]
+        )
+
     @app.get("/api/dcim/sites/")
     def sites(request: Request) -> dict[str, Any]:
         _check_token(request)

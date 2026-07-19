@@ -75,6 +75,7 @@ def seed(state: MockState, devices: int = 2) -> None:
             "status": {"value": "planned"},
             "site": {"id": NETBOX_SITE_ID, "name": NETBOX_SITE_NAME},
             "primary_ip4": {"address": f"172.20.10.{i}/24"},
+            "location": {"id": 101, "name": "Floor 1"},
             "custom_fields": {"snmp_location": "FFM DC1 / Rack 4"},
             "config_context": {"ntp_server": "10.0.0.1"},
         }

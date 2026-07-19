@@ -14,8 +14,32 @@ from app.clients.netbox import NetBoxClient
 
 logger = logging.getLogger(__name__)
 
-# netbox_site_id -> (ccc_site_id, ccc_site_name)
-SiteMappingLookup = dict[int, tuple[str, str]]
+# (netbox_site_id, netbox_location_id | None) -> (ccc_site_id, ccc_site_name)
+# location_id None = mapping for the whole site.
+SiteMappingLookup = dict[tuple[int, int | None], tuple[str, str]]
+
+# netbox location_id -> parent location_id (None = directly below the site)
+LocationParents = dict[int, int | None]
+
+
+def resolve_ccc_site(
+    site_id: int,
+    location_id: int | None,
+    mappings: SiteMappingLookup,
+    location_parents: LocationParents,
+) -> tuple[str, str] | None:
+    """Most specific mapped level wins: the device's location, then its parent
+    locations (floor -> building -> …), then the site itself."""
+    current = location_id
+    seen: set[int] = set()
+    while current is not None and current not in seen:
+        seen.add(current)
+        mapping = mappings.get((site_id, current))
+        if mapping:
+            return mapping
+        current = location_parents.get(current)
+    return mappings.get((site_id, None))
+
 
 # Interface-name prefixes that qualify as management interfaces for the
 # mgmt-IP fallback lookup (case-insensitive; configurable in a later phase).
@@ -66,6 +90,7 @@ async def match_serials(
     serials: list[str],
     netbox: NetBoxClient,
     site_mappings: SiteMappingLookup,
+    location_parents: LocationParents | None = None,
 ) -> list[MatchResult]:
     """Match the given CCC serials against NetBox devices in status `planned`."""
     planned = await netbox.get_devices(status="planned")
@@ -103,7 +128,12 @@ async def match_serials(
                 ]
             vlan_options = vlan_cache[site_id]
 
-        mapping = site_mappings.get(site_id) if site_id is not None else None
+        mapping = None
+        if site_id is not None:
+            location = device.get("location") or {}
+            mapping = resolve_ccc_site(
+                int(site_id), location.get("id"), site_mappings, location_parents or {}
+            )
         results.append(
             MatchResult(
                 serial=serial,
