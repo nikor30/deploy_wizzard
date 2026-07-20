@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
@@ -129,6 +129,34 @@ describe('Wizard', () => {
     expect(screen.getByText('matched')).toBeInTheDocument()
     expect(screen.getByText('no NetBox match')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Continue to Day-0 claim \(1 device/ })).toBeEnabled()
+  })
+
+  it('shows failed/attempted devices with their state and a re-claim hint', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/wizard/pnp-devices')
+        return Promise.resolve(
+          jsonResponse([
+            ...pnpDevices,
+            {
+              ccc_device_id: 'pnp-err',
+              serial: 'FCWFAILED01',
+              pid: 'C9300-48P',
+              state: 'Error',
+              ip_address: '10.1.1.9',
+              last_contact: null,
+            },
+          ]),
+        )
+      return Promise.resolve(jsonResponse([]))
+    })
+    renderWizard()
+    await userEvent.click(screen.getByRole('button', { name: 'Start new onboarding job' }))
+
+    // the Error-state device is listed and selectable, not filtered out
+    const row = (await screen.findByText('FCWFAILED01')).closest('tr')!
+    expect(within(row).getByText('Error')).toBeInTheDocument()
+    expect(screen.getByLabelText('Select FCWFAILED01')).toBeEnabled()
+    expect(screen.getByText(/earlier onboarding attempts/)).toBeInTheDocument()
   })
 
   it('runs Day-0: template pick, start claim, live progress to summary', async () => {

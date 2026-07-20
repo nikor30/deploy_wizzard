@@ -529,3 +529,19 @@ on "Floor 1" (child of Building A) resolves to that node via the parent walk,
 while devices without a location keep using the site-level mapping. Day-N
 variables can now use e.g. `device.uplinks.0.name`, `device.uplinks.0.peer_device`,
 `device.mgmt.netmask`, `device.mgmt.network` — all suggested automatically.
+
+## Bugfix: failed/reset switches invisible in the wizard (v1.3.2) ✅
+
+Live feedback: a switch that failed onboarding and was factory-reset still
+showed in Catalyst Center but not in the wizard. Cause: `/api/wizard/pnp-devices`
+queried only `state=Unclaimed`, but a failed/reset device lingers in CCC as
+`Error`/`Planned`/`Onboarding` (CCC keeps the old PnP record).
+
+- [x] `CatalystCenterClient.get_pnp_devices()` now queries all actionable
+  states (`Unclaimed`, `Planned`, `Onboarding`, `Error`), one query per
+  state (the proven single-state filter), merged + de-duplicated by id
+- [x] Wizard select view shows a colored state badge and a hint that
+  non-Unclaimed rows are earlier attempts, re-claimable after a reset
+- [x] Regression tests: client merges/dedups + surfaces Error devices; wizard
+  API lists an Error-state device; frontend renders it with badge + hint
+- [x] 143 pytest / 34 vitest / 4 e2e green; runbook troubleshooting row added

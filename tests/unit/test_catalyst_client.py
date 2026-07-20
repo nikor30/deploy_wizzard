@@ -4,7 +4,7 @@ import app.clients.base as base
 import httpx
 import pytest
 import respx
-from app.clients.catalyst import PAGE_SIZE, CatalystCenterClient
+from app.clients.catalyst import PAGE_SIZE, PNP_ACTIONABLE_STATES, CatalystCenterClient
 from app.errors import CatalystAuthError, CatalystError
 
 BASE = "https://ccc.example.com"
@@ -116,14 +116,44 @@ async def test_pagination_collects_all_pages() -> None:
 
 
 @respx.mock
-async def test_pnp_devices_passes_state_param() -> None:
+async def test_pnp_devices_query_all_actionable_states() -> None:
+    """The wizard must see failed/reset devices (Error/Planned/Onboarding),
+    not only Unclaimed — one query per actionable state, merged."""
     respx.post(TOKEN_URL).respond(200, json={"Token": "tok"})
     pnp_route = respx.get(f"{BASE}/dna/intent/api/v1/onboarding/pnp-device").respond(
         200, json={"response": []}
     )
     async with CatalystCenterClient(BASE, "admin", "pw") as client:
         await client.get_pnp_devices()
-    assert pnp_route.calls[0].request.url.params["state"] == "Unclaimed"
+    queried = {call.request.url.params["state"] for call in pnp_route.calls}
+    assert queried == set(PNP_ACTIONABLE_STATES)
+    assert "Error" in queried
+
+
+@respx.mock
+async def test_pnp_devices_lists_failed_device_and_dedups() -> None:
+    """Regression: a switch that failed onboarding stays in CCC as Error and
+    must appear in the list; a device returned under two states is not doubled."""
+    respx.post(TOKEN_URL).respond(200, json={"Token": "tok"})
+
+    def by_state(request: httpx.Request) -> httpx.Response:
+        state = request.url.params["state"]
+        if state == "Unclaimed":
+            return httpx.Response(
+                200, json=[{"id": "pnp-new", "deviceInfo": {"serialNumber": "NEW", "state": state}}]
+            )
+        if state == "Error":
+            return httpx.Response(
+                200,
+                json=[{"id": "pnp-old", "deviceInfo": {"serialNumber": "OLD", "state": state}}],
+            )
+        return httpx.Response(200, json=[])
+
+    respx.get(f"{BASE}/dna/intent/api/v1/onboarding/pnp-device").mock(side_effect=by_state)
+    async with CatalystCenterClient(BASE, "admin", "pw") as client:
+        devices = await client.get_pnp_devices()
+    by_serial = {d["deviceInfo"]["serialNumber"]: d["deviceInfo"]["state"] for d in devices}
+    assert by_serial == {"NEW": "Unclaimed", "OLD": "Error"}
 
 
 @respx.mock
@@ -143,7 +173,7 @@ async def test_pnp_devices_accepts_bare_array_response() -> None:
         httpx.Response(200, json=[{"id": "pnp-x", "deviceInfo": {"serialNumber": "SNX"}}]),
     ]
     async with CatalystCenterClient(BASE, "admin", "pw") as client:
-        devices = await client.get_pnp_devices()
+        devices = await client.get_pnp_devices(states=["Unclaimed"])
     assert len(devices) == PAGE_SIZE + 1
     assert pnp_route.call_count == 2
 
@@ -174,7 +204,7 @@ async def test_pnp_list_uses_zero_based_offset() -> None:
         httpx.Response(200, json=[{"id": "pnp-last", "deviceInfo": {"serialNumber": "LAST"}}]),
     ]
     async with CatalystCenterClient(BASE, "admin", "pw") as client:
-        devices = await client.get_pnp_devices()
+        devices = await client.get_pnp_devices(states=["Unclaimed"])
     assert len(devices) == PAGE_SIZE + 1
     first, second = (call.request.url.params for call in pnp_route.calls)
     assert first["offset"] == "0"
