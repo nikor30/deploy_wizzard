@@ -148,9 +148,15 @@ def _get_job(db: Session, job_id: int) -> Job:
 
 @router.get("/pnp-devices")
 async def list_pnp_devices(db: DbSession) -> list[PnpDevice]:
-    """All Catalyst Center PnP devices in state Unclaimed."""
+    """Catalyst Center PnP devices that still need onboarding.
+
+    Not just `Unclaimed`: devices that failed a previous claim (or were
+    factory-reset after one) linger in CCC as Error/Planned/Onboarding, so
+    they are listed here too — with their state shown — instead of silently
+    dropping out of the wizard while still visible in CCC's own GUI.
+    """
     async with get_catalyst_client(db) as client:
-        devices = await client.get_pnp_devices(state="Unclaimed")
+        devices = await client.get_pnp_devices()
     result: list[PnpDevice] = []
     for entry in devices:
         info = entry.get("deviceInfo") or {}

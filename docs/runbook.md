@@ -69,6 +69,7 @@ podman volume import pnpb-data pnpb-backup.tar       # restore (container stoppe
 |---|---|---|
 | "CCC rejected the credentials" on test | wrong user/password or missing Intent API role | verify the account can call `/dna/intent/api/v1/site` |
 | Wizard shows fewer unclaimed devices than CCC | fixed in v1.1+ (0-based PnP paging) | upgrade |
+| A device visible in CCC (Error/Planned/Onboarding) is missing from the wizard | fixed in v1.3.2+ — the wizard used to list only `Unclaimed`; failed/reset devices linger in other states | upgrade; the device now appears with its state shown and can be re-claimed |
 | Device row "site not mapped" | NetBox site has no CCC mapping | Settings → Site Mapping |
 | Device "no NetBox match" | serial missing in NetBox or device not in `planned` status | fix the device in NetBox, then *Re-run matching* — serials are compared case/whitespace-insensitively |
 | Claim fails with no reason | CCC buries errors in the task tree | the app drills child tasks automatically; see the Logs page entry for the full context |

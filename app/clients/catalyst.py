@@ -8,6 +8,7 @@ X-Auth-Token. Tokens live ~60 min; we refresh proactively at 55 min and on a
 
 import asyncio
 import time
+from collections.abc import Sequence
 from types import TracebackType
 from typing import Any
 
@@ -19,6 +20,14 @@ from app.errors import CatalystAuthError, CatalystError
 TOKEN_LIFETIME_SECONDS = 55 * 60
 MAX_CONCURRENT_REQUESTS = 5
 PAGE_SIZE = 50
+
+# PnP workflow states that are still actionable for onboarding. A device that
+# failed a claim (or was reset after a failed attempt) stays in the CCC PnP
+# inventory as Error/Planned/Onboarding — CCC keeps the old record — so the
+# wizard must list those, not just Unclaimed, or the device is invisible here
+# while still showing in CCC's own GUI. "Provisioned"/"Deleted" are terminal
+# and left out to keep the list focused on devices that still need work.
+PNP_ACTIONABLE_STATES: tuple[str, ...] = ("Unclaimed", "Planned", "Onboarding", "Error")
 
 
 class CatalystCenterClient:
@@ -175,12 +184,26 @@ class CatalystCenterClient:
     async def get_sites(self) -> list[dict[str, Any]]:
         return await self._get_paginated("/dna/intent/api/v1/site")
 
-    async def get_pnp_devices(self, state: str = "Unclaimed") -> list[dict[str, Any]]:
-        return await self._get_paginated(
-            "/dna/intent/api/v1/onboarding/pnp-device",
-            params={"state": state},
-            first_offset=0,
-        )
+    async def get_pnp_devices(
+        self, states: Sequence[str] = PNP_ACTIONABLE_STATES
+    ) -> list[dict[str, Any]]:
+        """PnP devices across the given workflow states (default: everything
+        not yet successfully provisioned), merged and de-duplicated by id.
+
+        One query per state — the single-state filter is the shape proven on
+        live CCC 2.3.7; this avoids betting on multi-value or omitted-state
+        query support. Order follows `states`, so Unclaimed devices sort first.
+        """
+        merged: dict[str, dict[str, Any]] = {}
+        for state in states:
+            page = await self._get_paginated(
+                "/dna/intent/api/v1/onboarding/pnp-device",
+                params={"state": state},
+                first_offset=0,
+            )
+            for device in page:
+                merged.setdefault(str(device.get("id")), device)
+        return list(merged.values())
 
     async def get_pnp_device(self, device_id: str) -> dict[str, Any]:
         """Single PnP device — used to poll deviceInfo.state during claiming."""

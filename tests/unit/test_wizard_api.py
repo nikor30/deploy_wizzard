@@ -1,3 +1,4 @@
+import httpx
 import respx
 from fastapi.testclient import TestClient
 
@@ -81,6 +82,39 @@ def test_pnp_devices_lists_unclaimed(client: TestClient) -> None:
     assert device["serial"] == "FCW1234ABCD"
     assert device["pid"] == "C9300-48P"
     assert pnp.calls[0].request.url.params["state"] == "Unclaimed"
+
+
+def test_pnp_devices_lists_failed_device_not_only_unclaimed(client: TestClient) -> None:
+    """A switch that failed onboarding sits in CCC as Error (kept even after a
+    factory reset) — it must show up in the wizard, not silently disappear."""
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="testserver").pass_through()
+        respx_mock.post(f"{CCC}/dna/system/api/v1/auth/token").respond(200, json={"Token": "tok"})
+
+        def by_state(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("state") == "Error":
+                return httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "id": "pnp-err",
+                            "deviceInfo": {
+                                "serialNumber": "FCWFAILED01",
+                                "pid": "C9300-48P",
+                                "state": "Error",
+                            },
+                        }
+                    ],
+                )
+            return httpx.Response(200, json=[])
+
+        respx_mock.get(f"{CCC}/dna/intent/api/v1/onboarding/pnp-device").mock(side_effect=by_state)
+        _store_credentials(client)
+        response = client.get("/api/wizard/pnp-devices")
+    assert response.status_code == 200
+    (device,) = response.json()
+    assert device["serial"] == "FCWFAILED01"
+    assert device["state"] == "Error"
 
 
 def test_job_lifecycle_create_get_resume(client: TestClient) -> None:
