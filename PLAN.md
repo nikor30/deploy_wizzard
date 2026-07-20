@@ -601,3 +601,26 @@ missing), and a global debug switch to inspect what's needed/prefilled/open.
 prefilled from NetBox and GATEWAY as an editable field pre-filled with the
 subnet's .1; enable debug on Settings → Credentials to see each variable's
 source badge.
+
+## Day-0 variable auto-fill for the real Webasto template + global variables (v1.6.0) ✅
+
+Grounded in the live 00_Webasto_OnBoarding template + the SVEL051CIS NetBox
+device: match every open Day-0 field to its NetBox source so only the AES key
+stays open, and make that a global variable set once.
+
+- [x] More Day-0 derivations: `mgmt_subnet` (from the mgmt IP), `mgmt_vlan_name`
+  (from the VLAN picked in matching), and context aliases SWITCHTYPE/
+  CAMPUSSWITCH/ROLE → `device.role.name`, SITE/LOCATION/RACK → their paths
+- [x] Global variables: a template secret auto-fills any Day-0/Day-N template
+  variable with the **same name** (set once, masked, decrypted only for the
+  claim/deploy) — no explicit `secret.<name>` mapping needed; `resolve_variables`
+  and `resolve_day0_variables` both do name matching
+- [x] Day-0 claim decrypts secret/global-sourced variables just-in-time
+  (`build_claim_payload(secret_values=…)`, wired through `run_day0`)
+- [x] UI: "Template secrets" → "Global variables & secrets" with auto-fill copy
+- [x] 161 pytest / 35 vitest / 4 e2e green
+
+**Demo:** for 00_Webasto_OnBoarding, MGMT_IP/MGMT_SUBNET/MGMT_VLAN/
+MGMT_VLAN_NAME/SWITCHTYPE/CAMPUSSWITCH all prefill from NetBox, DEFAULT_GATEWAY
+is the editable .1 guess, and AES_ENCRYPTION_KEY fills from a global variable —
+nothing left open.

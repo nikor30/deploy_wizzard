@@ -34,6 +34,72 @@ def test_builtins_include_gateway_guess_first_host() -> None:
     assert values["gateway"] == "172.20.10.1"  # first host of the /24
 
 
+def test_builtins_include_subnet_and_vlan_name() -> None:
+    device = _device(vlan_options=[{"id": 5, "vid": 900, "name": "MGMT"}])
+    values = day0_builtins(device)
+    assert values["mgmt_subnet"] == "172.20.10.0/24"
+    assert values["mgmt_vlan_name"] == "MGMT"
+
+
+def test_resolve_webasto_template_only_leaves_aes_open() -> None:
+    """The real 00_Webasto_OnBoarding variables all resolve from NetBox +
+    globals; only the AES key stays open (as a global set once)."""
+    device = _device(vlan_options=[{"id": 5, "vid": 900, "name": "MGMT"}])
+    context = {"device": {"role": {"name": "access"}}}
+    variables = [
+        "MGMT_IP",
+        "MGMT_SUBNET",
+        "MGMT_VLAN",
+        "MGMT_VLAN_NAME",
+        "DEFAULT_GATEWAY",
+        "SWITCHTYPE",
+        "CAMPUSSWITCH",
+        "AES_ENCRYPTION_KEY",
+        "PASSWORD_ENCRYPTION_KEY",
+    ]
+    resolved = resolve_day0_variables(
+        variables,
+        device,
+        context,
+        {},
+        secret_names=["AES_ENCRYPTION_KEY", "PASSWORD_ENCRYPTION_KEY"],
+    )
+    assert resolved["MGMT_IP"] == {"value": "172.20.10.5", "source": "netbox"}
+    assert resolved["MGMT_SUBNET"] == {"value": "172.20.10.0/24", "source": "netbox"}
+    assert resolved["MGMT_VLAN"] == {"value": "900", "source": "netbox"}
+    assert resolved["MGMT_VLAN_NAME"] == {"value": "MGMT", "source": "netbox"}
+    assert resolved["SWITCHTYPE"] == {"value": "access", "source": "netbox"}
+    assert resolved["CAMPUSSWITCH"] == {"value": "access", "source": "netbox"}
+    # gateway is a guess, editable
+    assert resolved["DEFAULT_GATEWAY"] == {"value": "172.20.10.1", "source": "manual"}
+    # the AES/password keys come from the global variables (set once), masked
+    assert resolved["AES_ENCRYPTION_KEY"] == {
+        "value": "****",
+        "source": "secret",
+        "secret": "AES_ENCRYPTION_KEY",
+    }
+    assert resolved["PASSWORD_ENCRYPTION_KEY"]["source"] == "secret"
+    # nothing left as open manual entry
+    assert not [v for v in resolved.values() if v["source"] == "manual" and v["value"] == ""]
+
+
+def test_claim_payload_decrypts_global_secret_values() -> None:
+    device = _device()
+    device.day0_variables = {
+        "HOSTNAME": {"value": "sw-ffm-01", "source": "netbox"},
+        "AES_KEY": {"value": "****", "source": "secret", "secret": "AES_KEY"},
+    }
+    payload = build_claim_payload(
+        device,
+        config_id="tpl-0",
+        image_id=None,
+        secret_values={"AES_KEY": "the-real-aes-key"},
+    )
+    params = {p["key"]: p["value"] for p in payload["configInfo"]["configParameters"]}
+    assert params["AES_KEY"] == "the-real-aes-key"
+    assert params["HOSTNAME"] == "sw-ffm-01"
+
+
 def test_resolve_prefills_known_and_flags_gateway_manual() -> None:
     variables = ["HOSTNAME", "MGMT_IP", "MGMT_MASK", "GATEWAY", "MGMT_VLAN", "SNMP_LOCATION"]
     resolved = resolve_day0_variables(

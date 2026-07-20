@@ -7,16 +7,19 @@ never aborts or rolls back its siblings.
 import asyncio
 import ipaddress
 import logging
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import select
+
 from app.clients.catalyst import CatalystCenterClient
 from app.clients.webhook import send_webhook
-from app.db.models import Job, JobDevice, ServiceSettings, WebhookDelivery
+from app.db.models import Job, JobDevice, ServiceSettings, TemplateSecret, WebhookDelivery
 from app.db.session import open_session
 from app.errors import ConfigurationError, PnPBridgeError, TaskTimeout
 from app.services import settings_store
-from app.services.dayn import resolve_path
+from app.services.dayn import SECRET, SECRET_MASK, resolve_path
 from app.services.matching import MATCHED
 
 logger = logging.getLogger(__name__)
@@ -34,6 +37,8 @@ STATES_FAILED = ("Error", "Failed")
 SRC_NETBOX = "netbox"  # prefilled from the NetBox match (read-only)
 SRC_MAPPED = "mapped"  # prefilled via a Day-N dot-path mapping (read-only)
 SRC_MANUAL = "manual"  # open field the operator fills (may carry a suggestion)
+# a global variable / template secret matched by name resolves to source
+# SECRET (from app.services.dayn) — masked here, decrypted only for the claim
 
 # Normalized template-variable name -> built-in onboarding value key. The
 # names CCC onboarding templates use vary, so a handful of aliases each.
@@ -46,6 +51,7 @@ DAY0_ALIASES: dict[str, str] = {
     "MANAGEMENTIP": "mgmt_ip",
     "IP": "mgmt_ip",
     "IPADDRESS": "mgmt_ip",
+    "MGMTVLANIP": "mgmt_ip",
     "MGMTMASK": "mgmt_mask",
     "SUBNETMASK": "mgmt_mask",
     "NETMASK": "mgmt_mask",
@@ -53,6 +59,8 @@ DAY0_ALIASES: dict[str, str] = {
     "MGMTPREFIX": "mgmt_prefix",
     "PREFIX": "mgmt_prefix",
     "PREFIXLENGTH": "mgmt_prefix",
+    "MGMTSUBNET": "mgmt_subnet",
+    "SUBNET": "mgmt_subnet",
     "GATEWAY": "gateway",
     "DEFAULTGATEWAY": "gateway",
     "GW": "gateway",
@@ -61,6 +69,22 @@ DAY0_ALIASES: dict[str, str] = {
     "MANAGEMENTVLAN": "mgmt_vlan",
     "VLAN": "mgmt_vlan",
     "MGMTVLANID": "mgmt_vlan",
+    "MGMTVLANNAME": "mgmt_vlan_name",
+    "VLANNAME": "mgmt_vlan_name",
+}
+
+# Variables whose value comes from the NetBox device context by dot-path
+# (not from the JobDevice match row). Role covers switchType/campusswitch.
+DAY0_CONTEXT_ALIASES: dict[str, str] = {
+    "SWITCHTYPE": "device.role.name",
+    "SWITCHTYP": "device.role.name",
+    "CAMPUSSWITCH": "device.role.name",
+    "CAMPUSSUPSWITCH": "device.role.name",
+    "DEVICEROLE": "device.role.name",
+    "ROLE": "device.role.name",
+    "SITE": "device.site.name",
+    "LOCATION": "device.location.name",
+    "RACK": "device.rack.name",
 }
 
 
@@ -70,8 +94,8 @@ def _normalize_var(name: str) -> str:
 
 def day0_builtins(device: JobDevice) -> dict[str, str]:
     """The standard onboarding values derived from the NetBox match: hostname,
-    mgmt IP/mask/prefix, mgmt VLAN, and a best-effort gateway guess (first host
-    of the mgmt subnet — the operator confirms/overrides it)."""
+    mgmt IP/mask/prefix/subnet, mgmt VLAN + its name, and a best-effort gateway
+    guess (first host of the mgmt subnet — the operator confirms/overrides it)."""
     values: dict[str, str] = {}
     if device.netbox_name:
         values["hostname"] = device.netbox_name
@@ -80,12 +104,17 @@ def day0_builtins(device: JobDevice) -> dict[str, str]:
         values["mgmt_ip"] = str(iface.ip)
         values["mgmt_mask"] = str(iface.network.netmask)
         values["mgmt_prefix"] = str(iface.network.prefixlen)
+        values["mgmt_subnet"] = str(iface.network)
         hosts = iface.network.hosts()
         first = next(iter(hosts), None)
         if first is not None:
             values["gateway"] = str(first)
     if device.mgmt_vlan is not None:
         values["mgmt_vlan"] = str(device.mgmt_vlan)
+        for option in device.vlan_options or []:
+            if option.get("vid") == device.mgmt_vlan and option.get("name"):
+                values["mgmt_vlan_name"] = str(option["name"])
+                break
     return values
 
 
@@ -94,27 +123,41 @@ def resolve_day0_variables(
     device: JobDevice,
     context: dict[str, Any],
     mappings: dict[str, str],
+    secret_names: Iterable[str] = (),
 ) -> dict[str, dict[str, Any]]:
-    """Resolve each Day-0 template variable: first the built-in onboarding
-    values (by name alias), then a Day-N dot-path mapping, else open for manual
-    entry. `gateway` is a guess and stays editable (source `manual`)."""
+    """Resolve each Day-0 template variable, in order:
+    built-in onboarding value (by name alias) → NetBox context alias
+    (role/site/…) → explicit Day-N dot-path mapping → global variable / secret
+    matched by name (set once, masked) → open for manual entry. `gateway` is a
+    guess and stays editable (source `manual`)."""
     builtins = day0_builtins(device)
+    secrets_by_norm = {_normalize_var(name): name for name in secret_names}
     result: dict[str, dict[str, Any]] = {}
     for variable in variables:
-        key = DAY0_ALIASES.get(_normalize_var(variable))
+        norm = _normalize_var(variable)
+        key = DAY0_ALIASES.get(norm)
         if key and key in builtins:
-            if key == "gateway":
-                # a guess — surface it as an editable manual field pre-filled
-                result[variable] = {"value": builtins[key], "source": SRC_MANUAL}
-            else:
-                result[variable] = {"value": builtins[key], "source": SRC_NETBOX}
+            source = SRC_MANUAL if key == "gateway" else SRC_NETBOX
+            result[variable] = {"value": builtins[key], "source": source}
+            continue
+        context_path = DAY0_CONTEXT_ALIASES.get(norm)
+        value = resolve_path(context, context_path) if context_path else None
+        if value is not None:
+            result[variable] = {"value": value, "source": SRC_NETBOX}
             continue
         path = mappings.get(variable)
         value = resolve_path(context, path) if path else None
         if value is not None:
             result[variable] = {"value": value, "source": SRC_MAPPED}
-        else:
-            result[variable] = {"value": "", "source": SRC_MANUAL}
+            continue
+        if norm in secrets_by_norm:
+            result[variable] = {
+                "value": SECRET_MASK,
+                "source": SECRET,
+                "secret": secrets_by_norm[norm],
+            }
+            continue
+        result[variable] = {"value": "", "source": SRC_MANUAL}
     return result
 
 
@@ -124,13 +167,15 @@ def build_claim_payload(
     config_id: str,
     image_id: str | None,
     overrides: dict[str, str] | None = None,
+    secret_values: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Site-claim payload per CLAUDE.md §6.1.
 
     Uses the resolved `day0_variables` (template introspection) when present,
-    applying operator `overrides` for open fields; empty values are omitted.
-    Falls back to the legacy fixed HOSTNAME/MGMT_IP/MGMT_MASK/MGMT_VLAN set when
-    the job was claimed without a prepare step."""
+    applying operator `overrides` for open fields and decrypting secret/global
+    values just-in-time from `secret_values`; empty values are omitted. Falls
+    back to the legacy fixed HOSTNAME/MGMT_IP/MGMT_MASK/MGMT_VLAN set when the
+    job was claimed without a prepare step."""
     if device.match_status != MATCHED:
         raise ConfigurationError(f"Device {device.serial} is not matched — cannot claim.")
     if not device.ccc_site_id:
@@ -139,8 +184,12 @@ def build_claim_payload(
     parameters: list[dict[str, str]] = []
     if device.day0_variables:
         overrides = overrides or {}
+        secret_values = secret_values or {}
         for variable, info in device.day0_variables.items():
-            value = overrides.get(variable, info.get("value") or "")
+            if info.get("source") == SECRET:
+                value = secret_values.get(str(info.get("secret")), "")
+            else:
+                value = overrides.get(variable, info.get("value") or "")
             if value != "":
                 parameters.append({"key": variable, "value": str(value)})
     else:
@@ -296,12 +345,20 @@ async def run_day0(
         job.day0_image_id = image_id
         catalyst_row = settings_store.get_service_settings(db, "catalyst")
         catalyst_secret = settings_store.decrypt_secret(catalyst_row)
+        # decrypt template secrets once (name -> plaintext) for global variables
+        box = settings_store.get_secret_box()
+        secret_values = {
+            row.name: box.decrypt(row.secret_encrypted)
+            for row in db.scalars(select(TemplateSecret)).all()
+        }
         work: list[tuple[int, dict[str, Any]]] = []
         for device in job.devices:
             if device.match_status != MATCHED:
                 continue
             try:
-                payload = build_claim_payload(device, config_id=config_id, image_id=image_id)
+                payload = build_claim_payload(
+                    device, config_id=config_id, image_id=image_id, secret_values=secret_values
+                )
             except PnPBridgeError as exc:
                 device.state = "failed"
                 device.error = exc.message

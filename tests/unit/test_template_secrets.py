@@ -28,6 +28,19 @@ def test_resolver_maps_secret_paths_without_exposing_values() -> None:
     assert result["HOSTNAME"] == {"value": "sw-1", "source": "mapped"}
 
 
+def test_resolver_auto_applies_secret_by_matching_name() -> None:
+    """A secret whose name matches a template variable auto-fills it — a global
+    variable set once, no explicit secret.<name> mapping needed."""
+    result = resolve_variables(
+        ["RADIUS_KEY", "OTHER"],
+        {},  # no explicit mappings
+        {"device": {}},
+        secret_names=["radius_key"],
+    )
+    assert result["RADIUS_KEY"] == {"value": "****", "source": "secret", "secret": "radius_key"}
+    assert result["OTHER"]["source"] == "manual"
+
+
 def test_resolver_unknown_secret_falls_back_to_manual() -> None:
     result = resolve_variables(
         ["RADIUS_KEY"],
