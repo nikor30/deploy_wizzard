@@ -545,3 +545,33 @@ queried only `state=Unclaimed`, but a failed/reset device lingers in CCC as
 - [x] Regression tests: client merges/dedups + surfaces Error devices; wizard
   API lists an Error-state device; frontend renders it with badge + hint
 - [x] 143 pytest / 34 vitest / 4 e2e green; runbook troubleshooting row added
+
+## Real IT-DayN variables + verify-by-serial (netbox_cc_dayn parity, v1.4.0) ✅
+
+Grounded in the user's All_templates.csv (real CC Day-N export) and the
+nikor30/netbox_cc_dayn mappings.yaml/resolvers, so our derivations match the
+production tool, plus a way to verify against a real device before deploying.
+
+- [x] `build_device_context` computes the flat CC values used by the real
+  templates: `device.uplink_ports` (cabled iface names, `Te1/1/3,Te1/1/4`),
+  `device.uplink_switch` (unique cabling far-end, ambiguous⇒unset),
+  `device.site_vlans` (`(vid,name);…`), `device.support_contact`
+  (site contact by role "Local IT" → device contact → tenant name)
+- [x] `NetBoxClient.get_contact_assignments()`; `load_device_context()` shared
+  helper fetches interfaces + site VLANs + contacts and builds the context
+  (used by prepare, suggest, and preview)
+- [x] Suggester learns the real variable names/paths (site_full_name,
+  building_room→location, rack_id, device_role, asset_id, uplink_*, arrVLANs→
+  site_vlans, support_contact) via new synonyms + computed candidate paths
+- [x] `POST /api/settings/dayn/preview {serial, template_id?}` — resolves the
+  current mappings against a real NetBox device (looked up by serial), read-only,
+  secrets stay masked; Day-N settings page gets a "Verify against a real device"
+  panel showing variable → source → resolved value
+- [x] Mock stack: contacts endpoint + device tenant/rack/role/asset_tag;
+  148 pytest / 35 vitest / 4 e2e green; CLAUDE.md §6.2 updated
+
+**Demo:** map the IT-DayN variables to the computed paths, enter serial
+`SN000001` on the Day-N page → the preview shows `uplink_ports=
+TenGigabitEthernet1/1/1`, `uplink_switch=dist-ffm-01`,
+`site_vlans=(110,MGMT);(120,USERS)`, `support_contact=Ladislav Fekete`, matching
+the All_templates.csv columns.

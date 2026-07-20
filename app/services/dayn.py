@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.clients.catalyst import CatalystCenterClient
+from app.clients.netbox import NetBoxClient
 from app.db.models import Job, JobDevice, ServiceSettings
 from app.db.session import open_session
 from app.errors import PnPBridgeError, TaskTimeout
@@ -83,14 +84,22 @@ def resolve_variables(
 
 
 def build_device_context(
-    device: dict[str, Any], interfaces: list[dict[str, Any]] | None = None
+    device: dict[str, Any],
+    interfaces: list[dict[str, Any]] | None = None,
+    site_vlans: list[dict[str, Any]] | None = None,
+    contacts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Variable-resolution context: the NetBox device enriched with uplink/
-    port details and computed management-network facts, so dot-paths like
-    `device.uplinks.0.peer_device` or `device.mgmt.netmask` resolve.
+    port details, computed management-network facts, and the flat Catalyst
+    Center Day-N values (uplink_ports, uplink_switch, site_vlans,
+    support_contact) so dot-paths like `device.uplink_ports` or
+    `device.mgmt.netmask` resolve.
 
-    Uplinks = cabled, non-management interfaces; peer data comes from
-    NetBox `connected_endpoints` when present (verify against live fixtures).
+    The derivations mirror the netbox_cc_dayn mappings.yaml resolvers:
+    uplinks are cabled, non-management interfaces; peer data comes from
+    NetBox `connected_endpoints`; site_vlans is `(vid,name);(vid,name);…`;
+    support_contact is the first site/device contact, falling back to tenant.
+    Verify against live fixtures via the mapping page's serial preview.
     """
     ctx = dict(device)
     ctx["interfaces"] = interfaces or []
@@ -112,6 +121,18 @@ def build_device_context(
             }
         )
     ctx["uplinks"] = uplinks
+
+    # Flat Catalyst-Center Day-N values (match netbox_cc_dayn resolvers).
+    port_names = [str(u["name"]) for u in uplinks if u.get("name")]
+    ctx["uplink_ports"] = ",".join(port_names)
+    peers = {str(u["peer_device"]) for u in uplinks if u.get("peer_device")}
+    # unique far-end device only; ambiguous (multiple) or none -> stays unset
+    ctx["uplink_switch"] = peers.pop() if len(peers) == 1 else None
+    ctx["site_vlans"] = ";".join(
+        f"({v.get('vid')},{v.get('name', '')})" for v in (site_vlans or []) if v.get("vid")
+    )
+    ctx["support_contact"] = _resolve_contact(device, contacts)
+
     address = (device.get("primary_ip4") or {}).get("address")
     if address:
         try:
@@ -128,6 +149,42 @@ def build_device_context(
                 "cidr": str(interface.network),
             }
     return {"device": ctx}
+
+
+SUPPORT_CONTACT_ROLE = "Local IT"
+
+
+async def load_device_context(netbox: NetBoxClient, device: dict[str, Any]) -> dict[str, Any]:
+    """Fetch the extra NetBox data a device's Day-N variables need — interfaces
+    (uplinks), the site's VLANs, and support contacts — and build the full
+    resolution context. Missing pieces degrade to empty, never raise."""
+    device_id = device.get("id")
+    interfaces: list[dict[str, Any]] = []
+    site_vlans: list[dict[str, Any]] = []
+    contacts: list[dict[str, Any]] = []
+    if device_id is not None:
+        interfaces = await netbox.get_interfaces(int(device_id))
+    site_id = (device.get("site") or {}).get("id")
+    if site_id is not None:
+        site_vlans = await netbox.get_vlans(int(site_id))
+        contacts = await netbox.get_contact_assignments(
+            "dcim.site", int(site_id), role=SUPPORT_CONTACT_ROLE
+        )
+    if not contacts and device_id is not None:
+        # fall back to a device-level contact (any role)
+        contacts = await netbox.get_contact_assignments("dcim.device", int(device_id))
+    return build_device_context(device, interfaces, site_vlans, contacts)
+
+
+def _resolve_contact(device: dict[str, Any], contacts: list[dict[str, Any]] | None) -> str | None:
+    """First contact name from NetBox contact assignments, else the device's
+    tenant name — mirrors the netbox_cc_dayn support_contact fallback chain."""
+    for assignment in contacts or []:
+        name = (assignment.get("contact") or {}).get("name")
+        if name:
+            return str(name)
+    tenant_name = (device.get("tenant") or {}).get("name")
+    return str(tenant_name) if tenant_name else None
 
 
 def build_deploy_payload(
@@ -231,8 +288,6 @@ async def _deploy_one(
         _set_device(device_id, "activate_failed", error="NetBox not configured.")
         return
     base_url, token, tls_verify = netbox_settings
-    from app.clients.netbox import NetBoxClient
-
     try:
         async with NetBoxClient(base_url, token, tls_verify=tls_verify) as netbox:
             await netbox.patch_device_status(netbox_device_id, "active")

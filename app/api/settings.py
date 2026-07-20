@@ -16,6 +16,7 @@ from app.db.session import get_db
 from app.errors import PnPBridgeError
 from app.services import settings_store
 from app.services.connections import get_catalyst_client, get_netbox_client
+from app.services.dayn import load_device_context, resolve_variables
 from app.services.suggest import suggest_variable_mappings
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -215,14 +216,17 @@ async def suggest_dayn_mappings(payload: DayNSuggestRequest, db: DbSession) -> l
         sample_devices = await netbox.get_devices(status="planned")
         if not sample_devices:
             sample_devices = await netbox.get_devices()
-    if not sample_devices:
-        raise HTTPException(
-            status_code=422,
-            detail="No NetBox device found to sample fields from - create at least one "
-            "device in NetBox first.",
-        )
+        if not sample_devices:
+            raise HTTPException(
+                status_code=422,
+                detail="No NetBox device found to sample fields from - create at least one "
+                "device in NetBox first.",
+            )
+        # enrich so the computed CC-style paths (device.uplink_ports,
+        # device.site_vlans, …) are offered as candidates too
+        context = await load_device_context(netbox, sample_devices[0])
     secret_names = list(db.scalars(select(TemplateSecret.name)).all())
-    suggestions = suggest_variable_mappings(variables, sample_devices[0], secret_names=secret_names)
+    suggestions = suggest_variable_mappings(variables, context["device"], secret_names=secret_names)
     logger.info(
         "Suggested %d of %d Day-N variables for template %s",
         sum(1 for s in suggestions.values() if s["source_path"]),
@@ -237,6 +241,77 @@ async def suggest_dayn_mappings(payload: DayNSuggestRequest, db: DbSession) -> l
         )
         for variable, info in suggestions.items()
     ]
+
+
+class DayNPreviewRequest(BaseModel):
+    serial: str
+    template_id: str | None = None
+
+
+class DayNPreviewVariable(BaseModel):
+    variable: str
+    source_path: str | None
+    value: str | None
+    source: str  # mapped | manual | secret
+
+
+class DayNPreviewOut(BaseModel):
+    netbox_device_id: int
+    netbox_name: str | None
+    netbox_site: str | None
+    variables: list[DayNPreviewVariable]
+
+
+@router.post("/dayn/preview")
+async def preview_dayn_for_serial(payload: DayNPreviewRequest, db: DbSession) -> DayNPreviewOut:
+    """Resolve the current Day-N variable mappings against one real NetBox
+    device, looked up by serial, so the operator can verify the values against
+    reality before deploying. Read-only — nothing is saved and no device is
+    touched. Secret-sourced variables show `****`, never the plaintext.
+    """
+    serial = payload.serial.strip()
+    if not serial:
+        raise HTTPException(status_code=422, detail="Enter a device serial number to preview.")
+
+    async with get_netbox_client(db) as netbox:
+        matches = await netbox.get_devices(serial=serial)
+        if not matches:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No NetBox device with serial '{serial}'.",
+            )
+        device = matches[0]
+        context = await load_device_context(netbox, device)
+
+    variables: list[str] = []
+    mappings = {m.variable: m.source_path for m in db.scalars(select(DayNMapping)).all()}
+    if payload.template_id:
+        async with get_catalyst_client(db) as catalyst:
+            template = await catalyst.get_template(payload.template_id)
+        variables = [
+            str(p.get("parameterName"))
+            for p in template.get("templateParams", [])
+            if p.get("parameterName")
+        ]
+    else:
+        variables = sorted(mappings)
+
+    secret_names = set(db.scalars(select(TemplateSecret.name)).all())
+    resolved = resolve_variables(variables, mappings, context, secret_names=secret_names)
+    return DayNPreviewOut(
+        netbox_device_id=int(device["id"]),
+        netbox_name=device.get("name"),
+        netbox_site=(device.get("site") or {}).get("name"),
+        variables=[
+            DayNPreviewVariable(
+                variable=variable,
+                source_path=mappings.get(variable),
+                value=info.get("value"),
+                source=str(info.get("source")),
+            )
+            for variable, info in resolved.items()
+        ],
+    )
 
 
 class TemplateSecretOut(BaseModel):

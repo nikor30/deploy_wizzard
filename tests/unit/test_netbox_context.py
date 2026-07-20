@@ -71,6 +71,67 @@ def test_context_exposes_uplinks_and_mgmt_network() -> None:
     assert resolve_path(context, "device.uplinks.1.name") is None
 
 
+def test_context_computes_catalyst_center_dayn_values() -> None:
+    """Flat CC values match the netbox_cc_dayn resolvers + the All_templates.csv
+    example: uplink_ports/uplink_switch from cabling, site_vlans as
+    (vid,name);…, support_contact from the site contact."""
+    device = {
+        "id": 1,
+        "name": "SVEL051CIS",
+        "tenant": {"name": "IT Operations"},
+    }
+    interfaces = [
+        {
+            "name": "Te1/1/3",
+            "mgmt_only": False,
+            "cable": {"id": 1},
+            "connected_endpoints": [{"name": "Gi1/0/1", "device": {"name": "svel001cis_swv"}}],
+        },
+        {
+            "name": "Te1/1/4",
+            "mgmt_only": False,
+            "cable": {"id": 2},
+            "connected_endpoints": [{"name": "Gi1/0/2", "device": {"name": "svel001cis_swv"}}],
+        },
+    ]
+    site_vlans = [
+        {"vid": 99, "name": "Quarantine"},
+        {"vid": 100, "name": "Medientechnik"},
+        {"vid": 1010, "name": "G1_Data"},
+    ]
+    contacts = [{"contact": {"name": "Ladislav Fekete"}, "role": {"name": "Local IT"}}]
+    context = build_device_context(device, interfaces, site_vlans, contacts)
+
+    assert resolve_path(context, "device.uplink_ports") == "Te1/1/3,Te1/1/4"
+    assert resolve_path(context, "device.uplink_switch") == "svel001cis_swv"
+    assert (
+        resolve_path(context, "device.site_vlans")
+        == "(99,Quarantine);(100,Medientechnik);(1010,G1_Data)"
+    )
+    assert resolve_path(context, "device.support_contact") == "Ladislav Fekete"
+
+
+def test_uplink_switch_none_when_ambiguous_contact_falls_back_to_tenant() -> None:
+    device = {"id": 1, "name": "sw", "tenant": {"name": "IT Operations"}}
+    interfaces = [
+        {
+            "name": "Te1/1/3",
+            "cable": {"id": 1},
+            "connected_endpoints": [{"name": "a", "device": {"name": "dist-a"}}],
+        },
+        {
+            "name": "Te1/1/4",
+            "cable": {"id": 2},
+            "connected_endpoints": [{"name": "b", "device": {"name": "dist-b"}}],
+        },
+    ]
+    context = build_device_context(device, interfaces, [], [])
+    # two different far-end switches -> ambiguous -> unset
+    assert resolve_path(context, "device.uplink_switch") is None
+    # no contacts -> tenant fallback
+    assert resolve_path(context, "device.support_contact") == "IT Operations"
+
+
 def test_candidate_paths_cover_uplinks_and_mgmt() -> None:
     paths = candidate_paths(build_device_context(DEVICE, INTERFACES)["device"])
     assert "device.uplinks.0.name" in paths
@@ -140,3 +201,108 @@ def test_location_mapping_roundtrip_and_duplicate_rejection(client: TestClient) 
 
     duplicate = client.put("/api/mappings/sites", json={"mappings": [item, item]})
     assert duplicate.status_code == 422
+
+
+# --- Day-N preview by serial (verify real data) ------------------------------
+
+CCC = "https://ccc.example.com"
+
+
+def _store_creds(client: TestClient) -> None:
+    client.put(
+        "/api/settings/credentials",
+        json={
+            "catalyst": {"base_url": CCC, "username": "admin", "secret": "pw"},
+            "netbox": {"base_url": NETBOX, "secret": "tok"},
+        },
+    )
+
+
+def _mock_netbox_device(respx_mock: respx.MockRouter) -> None:
+    respx_mock.get(f"{NETBOX}/api/dcim/devices/").respond(
+        200,
+        json={
+            "results": [
+                {
+                    "id": 1001,
+                    "name": "SVEL051CIS.global.web-int.net",
+                    "serial": "FOC21262B0R",
+                    "site": {"id": 10, "name": "Velky Meder (VEL)"},
+                    "location": {"id": 100, "name": "Warhouse Building 1"},
+                    "rack": {"name": "01"},
+                    "role": {"name": "access"},
+                    "asset_tag": "FOC21262B0R",
+                }
+            ],
+            "next": None,
+        },
+    )
+    respx_mock.get(f"{NETBOX}/api/dcim/interfaces/").respond(
+        200,
+        json={
+            "results": [
+                {
+                    "name": "Te1/1/3",
+                    "cable": {"id": 1},
+                    "connected_endpoints": [
+                        {"name": "Gi1/0/1", "device": {"name": "svel001cis_swv"}}
+                    ],
+                }
+            ],
+            "next": None,
+        },
+    )
+    respx_mock.get(f"{NETBOX}/api/ipam/vlans/").respond(
+        200,
+        json={"results": [{"vid": 1010, "name": "G1_Data"}], "next": None},
+    )
+    respx_mock.get(f"{NETBOX}/api/tenancy/contact-assignments/").respond(
+        200,
+        json={"results": [{"contact": {"name": "Ladislav Fekete"}}], "next": None},
+    )
+
+
+def test_preview_resolves_current_mappings_against_a_real_serial(client: TestClient) -> None:
+    _store_creds(client)
+    client.put(
+        "/api/settings/dayn",
+        json={
+            "mappings": [
+                {"variable": "site_full_name", "source_path": "device.site.name"},
+                {"variable": "building_room", "source_path": "device.location.name"},
+                {"variable": "uplink_ports", "source_path": "device.uplink_ports"},
+                {"variable": "uplink_switch", "source_path": "device.uplink_switch"},
+                {"variable": "support_contact", "source_path": "device.support_contact"},
+                {"variable": "patch_field", "source_path": ""},
+            ]
+        },
+    )
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="testserver").pass_through()
+        _mock_netbox_device(respx_mock)
+        response = client.post("/api/settings/dayn/preview", json={"serial": "FOC21262B0R"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["netbox_name"] == "SVEL051CIS.global.web-int.net"
+    assert body["netbox_site"] == "Velky Meder (VEL)"
+    values = {v["variable"]: v["value"] for v in body["variables"]}
+    assert values["site_full_name"] == "Velky Meder (VEL)"
+    assert values["building_room"] == "Warhouse Building 1"
+    assert values["uplink_ports"] == "Te1/1/3"
+    assert values["uplink_switch"] == "svel001cis_swv"
+    assert values["support_contact"] == "Ladislav Fekete"
+    # unmapped variable is flagged manual, not resolved
+    manual = {v["variable"]: v["source"] for v in body["variables"]}
+    assert manual["patch_field"] == "manual"
+
+
+def test_preview_unknown_serial_is_404(client: TestClient) -> None:
+    _store_creds(client)
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="testserver").pass_through()
+        respx_mock.get(f"{NETBOX}/api/dcim/devices/").respond(
+            200, json={"results": [], "next": None}
+        )
+        response = client.post("/api/settings/dayn/preview", json={"serial": "NOPE"})
+    assert response.status_code == 404
+    assert "NOPE" in response.json()["detail"]

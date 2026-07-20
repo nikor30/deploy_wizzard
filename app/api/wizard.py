@@ -19,7 +19,7 @@ from app.services.day0 import run_day0
 from app.services.dayn import (
     MANUAL,
     SECRET,
-    build_device_context,
+    load_device_context,
     resolve_variables,
     run_dayn,
 )
@@ -389,8 +389,7 @@ async def prepare_dayn(job_id: int, payload: DayNPrepareRequest, db: DbSession) 
             context: dict[str, Any] = {"device": {}}
             if device.netbox_device_id is not None:
                 netbox_device = await netbox.get_device(device.netbox_device_id)
-                interfaces = await netbox.get_interfaces(device.netbox_device_id)
-                context = build_device_context(netbox_device, interfaces)
+                context = await load_device_context(netbox, netbox_device)
             device.dayn_variables = resolve_variables(
                 variables, mappings, context, secret_names=secret_names
             )

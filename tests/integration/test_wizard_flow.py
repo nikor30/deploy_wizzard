@@ -196,3 +196,39 @@ def test_ccc_5xx_is_retried_through_the_real_stack(
     devices = configured_client.get("/api/wizard/pnp-devices")
     assert devices.status_code == 200
     assert len(devices.json()) == 2
+
+
+def test_dayn_preview_by_serial_resolves_netbox_derived_values(
+    configured_client: TestClient, mock: httpx.Client
+) -> None:
+    """The serial-preview resolves the CC-style values (uplink_ports,
+    uplink_switch, site_vlans, support_contact) against the mock NetBox —
+    the same derivations the All_templates.csv columns need."""
+    client = configured_client
+    client.put(
+        "/api/settings/dayn",
+        json={
+            "mappings": [
+                {"variable": "site_full_name", "source_path": "device.site.name"},
+                {"variable": "building_room", "source_path": "device.location.name"},
+                {"variable": "rack_id", "source_path": "device.rack.name"},
+                {"variable": "device_role", "source_path": "device.role.name"},
+                {"variable": "asset_id", "source_path": "device.asset_tag"},
+                {"variable": "uplink_ports", "source_path": "device.uplink_ports"},
+                {"variable": "uplink_switch", "source_path": "device.uplink_switch"},
+                {"variable": "arrVLANs", "source_path": "device.site_vlans"},
+                {"variable": "support_contact", "source_path": "device.support_contact"},
+            ]
+        },
+    )
+    response = client.post("/api/settings/dayn/preview", json={"serial": "SN000001"})
+    assert response.status_code == 200, response.text
+    values = {v["variable"]: v["value"] for v in response.json()["variables"]}
+    assert values["site_full_name"] == "FFM-DC1"
+    assert values["building_room"] == "Floor 1"
+    assert values["rack_id"] == "R01"
+    assert values["device_role"] == "access"
+    assert values["uplink_ports"] == "TenGigabitEthernet1/1/1"
+    assert values["uplink_switch"] == "dist-ffm-01"
+    assert values["arrVLANs"] == "(110,MGMT);(120,USERS)"
+    assert values["support_contact"] == "Ladislav Fekete"

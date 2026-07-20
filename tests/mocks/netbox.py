@@ -136,6 +136,26 @@ def create_netbox_app() -> FastAPI:
             ]
         )
 
+    @app.get("/api/tenancy/contact-assignments/")
+    def contact_assignments(
+        request: Request,
+        object_type: str | None = None,
+        object_id: int | None = None,
+        role: str | None = None,
+    ) -> dict[str, Any]:
+        _check_token(request)
+        if object_type == "dcim.site" and (role in (None, "Local IT")):
+            return _page(
+                [
+                    {
+                        "id": 1,
+                        "contact": {"id": 7, "name": "Ladislav Fekete"},
+                        "role": {"id": 1, "name": "Local IT"},
+                    }
+                ]
+            )
+        return _page([])
+
     @app.get("/api/ipam/ip-addresses/")
     def ip_addresses(request: Request, device_id: int | None = None) -> dict[str, Any]:
         _check_token(request)
