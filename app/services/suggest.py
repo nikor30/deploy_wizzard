@@ -30,8 +30,19 @@ _SYNONYMS: dict[str, list[str]] = {
     "address": ["address"],
     "site": ["site", "name"],
     "location": ["location", "site"],
+    "building": ["location"],
+    "room": ["location"],
+    "rack": ["rack"],
+    "role": ["role"],
+    "asset": ["asset", "tag"],
     "contact": ["contact"],
+    "support": ["support", "contact"],
     "vlan": ["vlan", "vid"],
+    "vlans": ["site", "vlans"],
+    "arrvlans": ["site", "vlans"],
+    "uplink": ["uplink"],
+    "ports": ["ports"],
+    "switch": ["switch"],
 }
 
 
@@ -118,8 +129,18 @@ def suggest_site_mappings(
     return suggestions
 
 
-_DEVICE_SCALAR_FIELDS = ("name", "serial", "asset_tag", "description")
-_NESTED_NAME_FIELDS = ("site", "role", "device_type", "platform", "tenant", "location")
+_DEVICE_SCALAR_FIELDS = (
+    "name",
+    "serial",
+    "asset_tag",
+    "description",
+    # flat Catalyst-Center Day-N values computed by build_device_context
+    "uplink_ports",
+    "uplink_switch",
+    "site_vlans",
+    "support_contact",
+)
+_NESTED_NAME_FIELDS = ("site", "role", "device_type", "platform", "tenant", "location", "rack")
 
 
 def candidate_paths(device: dict[str, Any]) -> list[str]:

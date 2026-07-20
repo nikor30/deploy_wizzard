@@ -201,6 +201,13 @@ def test_dayn_suggestions_endpoint(client: TestClient) -> None:
                 "next": None,
             },
         )
+        respx_mock.get(f"{NETBOX}/api/dcim/interfaces/").respond(
+            200, json={"results": [], "next": None}
+        )
+        respx_mock.get(f"{NETBOX}/api/ipam/vlans/").respond(200, json={"results": [], "next": None})
+        respx_mock.get(f"{NETBOX}/api/tenancy/contact-assignments/").respond(
+            200, json={"results": [], "next": None}
+        )
         response = client.post("/api/settings/dayn/suggest", json={"template_id": "tpl-1"})
     assert response.status_code == 200
     by_variable = {s["variable"]: s for s in response.json()}

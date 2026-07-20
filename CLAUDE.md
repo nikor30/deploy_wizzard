@@ -229,6 +229,10 @@ Retries: 3× exponential backoff; delivery status stored per event and retryable
   for Day-N variables (`connected_endpoints`, `cable`, `mgmt_only`).
 - **Config contexts / custom fields:** available on the device object; usable as Day-N
   variable sources.
+- **Contacts:** `GET /api/tenancy/contact-assignments/?object_type=dcim.site&object_id=<id>&role=<name>`
+  (also `object_type=dcim.device`) — used to derive the Day-N `support_contact`
+  variable (site contact by role → device contact → tenant name). Verify the param
+  shape against the live NetBox version via the mapping page's serial preview.
 - **Activate:** `PATCH /api/dcim/devices/<id>/` with `{"status": "active"}`.
 - Always paginate (`next` links) unless `limit=0` is used; respect `brief=true` where
   full objects aren't needed.

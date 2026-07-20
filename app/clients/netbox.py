@@ -109,6 +109,17 @@ class NetBoxClient:
     async def get_vlans(self, site_id: int) -> list[dict[str, Any]]:
         return await self._get_paginated("/api/ipam/vlans/", params={"site_id": site_id})
 
+    async def get_contact_assignments(
+        self, object_type: str, object_id: int, role: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Contact assignments for a NetBox object (v4.x tenancy). `object_type`
+        is e.g. 'dcim.site' or 'dcim.device'; `role` filters by contact-role
+        name. Used to derive the Day-N support_contact variable."""
+        params: dict[str, Any] = {"object_type": object_type, "object_id": object_id}
+        if role:
+            params["role"] = role
+        return await self._get_paginated("/api/tenancy/contact-assignments/", params=params)
+
     async def get_ip_addresses(self, device_id: int) -> list[dict[str, Any]]:
         return await self._get_paginated("/api/ipam/ip-addresses/", params={"device_id": device_id})
 

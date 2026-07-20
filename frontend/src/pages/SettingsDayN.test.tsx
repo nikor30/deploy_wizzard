@@ -129,3 +129,55 @@ describe('SettingsDayN template secrets', () => {
     await waitFor(() => expect(screen.queryByText('secret.radius_key')).not.toBeInTheDocument())
   })
 })
+
+describe('SettingsDayN verify against a real device', () => {
+  it('resolves the mappings for an entered serial and shows the values', async () => {
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/settings/dayn/preview' && init?.method === 'POST')
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              netbox_device_id: 1001,
+              netbox_name: 'SVEL051CIS.global.web-int.net',
+              netbox_site: 'Velky Meder (VEL)',
+              variables: [
+                {
+                  variable: 'uplink_switch',
+                  source_path: 'device.uplink_switch',
+                  value: 'svel001cis_swv',
+                  source: 'mapped',
+                },
+                {
+                  variable: 'patch_field',
+                  source_path: null,
+                  value: null,
+                  source: 'manual',
+                },
+              ],
+            }),
+        })
+      if (url === '/api/wizard/day0/templates')
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) })
+      if (url === '/api/settings/secrets')
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) })
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(stored) })
+    })
+    render(<SettingsDayN />)
+    await screen.findByDisplayValue('SNMP_LOCATION')
+
+    await userEvent.type(screen.getByLabelText('Device serial to verify'), 'FOC21262B0R')
+    await userEvent.click(screen.getByRole('button', { name: 'Verify' }))
+
+    expect(
+      await screen.findByText('SVEL051CIS.global.web-int.net', { exact: false }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('svel001cis_swv')).toBeInTheDocument()
+    expect(screen.getByText('manual entry')).toBeInTheDocument()
+    const call = fetchMock.mock.calls.find(([u]) => u === '/api/settings/dayn/preview')
+    expect(JSON.parse((call![1] as RequestInit).body as string)).toEqual({
+      serial: 'FOC21262B0R',
+      template_id: null,
+    })
+  })
+})

@@ -22,6 +22,20 @@ interface TemplateSecret {
   secret_masked: string
 }
 
+interface PreviewVariable {
+  variable: string
+  source_path: string | null
+  value: string | null
+  source: string
+}
+
+interface PreviewResult {
+  netbox_device_id: number
+  netbox_name: string | null
+  netbox_site: string | null
+  variables: PreviewVariable[]
+}
+
 interface Banner {
   ok: boolean
   detail: string
@@ -60,6 +74,28 @@ export default function SettingsDayN() {
   const [newSecretName, setNewSecretName] = useState('')
   const [newSecretValue, setNewSecretValue] = useState('')
   const [secretBusy, setSecretBusy] = useState(false)
+
+  const [previewSerial, setPreviewSerial] = useState('')
+  const [preview, setPreview] = useState<PreviewResult | null>(null)
+  const [previewing, setPreviewing] = useState(false)
+
+  const runPreview = async () => {
+    setPreviewing(true)
+    setBanner(null)
+    try {
+      const result = await fetchJson<PreviewResult>('/api/settings/dayn/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serial: previewSerial, template_id: templateId || null }),
+      })
+      setPreview(result)
+    } catch (err) {
+      setPreview(null)
+      setBanner({ ok: false, detail: (err as Error).message })
+    } finally {
+      setPreviewing(false)
+    }
+  }
 
   useEffect(() => {
     fetchJson<{ mappings: DayNMapping[] }>('/api/settings/dayn')
@@ -283,6 +319,75 @@ export default function SettingsDayN() {
             {suggesting ? 'Matching…' : 'Suggest mappings'}
           </button>
         </div>
+      </section>
+
+      <section
+        aria-label="Verify with a device"
+        className="mt-6 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
+      >
+        <h2 className="font-semibold">Verify against a real device</h2>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+          Enter a device serial number to resolve the mappings below against the real NetBox data
+          for that device — so you can check the values against reality before deploying. Read-only;
+          nothing is changed. If a template is selected above, its variables are used; otherwise the
+          saved mappings are.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <input
+            aria-label="Device serial to verify"
+            className={inputClass + ' w-72 font-mono'}
+            placeholder="e.g. FOC21262B0R"
+            value={previewSerial}
+            onChange={(e) => setPreviewSerial(e.target.value)}
+          />
+          <button
+            type="button"
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
+            disabled={!previewSerial.trim() || previewing}
+            onClick={() => void runPreview()}
+          >
+            {previewing ? 'Resolving…' : 'Verify'}
+          </button>
+        </div>
+        {preview && (
+          <div className="mt-4">
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              <strong>{preview.netbox_name ?? '—'}</strong>
+              {preview.netbox_site ? ` · ${preview.netbox_site}` : ''}
+            </p>
+            <div className="mt-2 overflow-x-auto rounded-md border border-slate-200 dark:border-slate-800">
+              <table className="w-full text-left text-sm">
+                <thead className="border-b border-slate-200 text-xs text-slate-500 uppercase dark:border-slate-800 dark:text-slate-400">
+                  <tr>
+                    <th className="px-3 py-2">Variable</th>
+                    <th className="px-3 py-2">Source</th>
+                    <th className="px-3 py-2">Resolved value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.variables.map((v) => (
+                    <tr
+                      key={v.variable}
+                      className="border-b border-slate-100 last:border-0 dark:border-slate-800"
+                    >
+                      <td className="px-3 py-2 font-mono">{v.variable}</td>
+                      <td className="px-3 py-2 font-mono text-xs text-slate-500 dark:text-slate-400">
+                        {v.source_path || '— manual —'}
+                      </td>
+                      <td className="px-3 py-2">
+                        {v.source === 'manual' ? (
+                          <span className="text-amber-600 dark:text-amber-400">manual entry</span>
+                        ) : (
+                          <span className="font-mono">{v.value}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </section>
 
       <div className="mt-6 flex flex-col gap-2">
