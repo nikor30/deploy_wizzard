@@ -16,6 +16,7 @@ from app.db.models import Job, JobDevice, ServiceSettings, WebhookDelivery
 from app.db.session import open_session
 from app.errors import ConfigurationError, PnPBridgeError, TaskTimeout
 from app.services import settings_store
+from app.services.dayn import resolve_path
 from app.services.matching import MATCHED
 
 logger = logging.getLogger(__name__)
@@ -29,27 +30,129 @@ STATE_SUCCESS = "Provisioned"
 STATES_FAILED = ("Error", "Failed")
 
 
+# Source labels for a resolved Day-0 variable (also used by the UI).
+SRC_NETBOX = "netbox"  # prefilled from the NetBox match (read-only)
+SRC_MAPPED = "mapped"  # prefilled via a Day-N dot-path mapping (read-only)
+SRC_MANUAL = "manual"  # open field the operator fills (may carry a suggestion)
+
+# Normalized template-variable name -> built-in onboarding value key. The
+# names CCC onboarding templates use vary, so a handful of aliases each.
+DAY0_ALIASES: dict[str, str] = {
+    "HOSTNAME": "hostname",
+    "HOST": "hostname",
+    "DEVICENAME": "hostname",
+    "SYSNAME": "hostname",
+    "MGMTIP": "mgmt_ip",
+    "MANAGEMENTIP": "mgmt_ip",
+    "IP": "mgmt_ip",
+    "IPADDRESS": "mgmt_ip",
+    "MGMTMASK": "mgmt_mask",
+    "SUBNETMASK": "mgmt_mask",
+    "NETMASK": "mgmt_mask",
+    "MASK": "mgmt_mask",
+    "MGMTPREFIX": "mgmt_prefix",
+    "PREFIX": "mgmt_prefix",
+    "PREFIXLENGTH": "mgmt_prefix",
+    "GATEWAY": "gateway",
+    "DEFAULTGATEWAY": "gateway",
+    "GW": "gateway",
+    "DEFGW": "gateway",
+    "MGMTVLAN": "mgmt_vlan",
+    "MANAGEMENTVLAN": "mgmt_vlan",
+    "VLAN": "mgmt_vlan",
+    "MGMTVLANID": "mgmt_vlan",
+}
+
+
+def _normalize_var(name: str) -> str:
+    return "".join(c for c in name.upper() if c.isalnum())
+
+
+def day0_builtins(device: JobDevice) -> dict[str, str]:
+    """The standard onboarding values derived from the NetBox match: hostname,
+    mgmt IP/mask/prefix, mgmt VLAN, and a best-effort gateway guess (first host
+    of the mgmt subnet — the operator confirms/overrides it)."""
+    values: dict[str, str] = {}
+    if device.netbox_name:
+        values["hostname"] = device.netbox_name
+    if device.mgmt_ip:
+        iface = ipaddress.ip_interface(device.mgmt_ip)
+        values["mgmt_ip"] = str(iface.ip)
+        values["mgmt_mask"] = str(iface.network.netmask)
+        values["mgmt_prefix"] = str(iface.network.prefixlen)
+        hosts = iface.network.hosts()
+        first = next(iter(hosts), None)
+        if first is not None:
+            values["gateway"] = str(first)
+    if device.mgmt_vlan is not None:
+        values["mgmt_vlan"] = str(device.mgmt_vlan)
+    return values
+
+
+def resolve_day0_variables(
+    variables: list[str],
+    device: JobDevice,
+    context: dict[str, Any],
+    mappings: dict[str, str],
+) -> dict[str, dict[str, Any]]:
+    """Resolve each Day-0 template variable: first the built-in onboarding
+    values (by name alias), then a Day-N dot-path mapping, else open for manual
+    entry. `gateway` is a guess and stays editable (source `manual`)."""
+    builtins = day0_builtins(device)
+    result: dict[str, dict[str, Any]] = {}
+    for variable in variables:
+        key = DAY0_ALIASES.get(_normalize_var(variable))
+        if key and key in builtins:
+            if key == "gateway":
+                # a guess — surface it as an editable manual field pre-filled
+                result[variable] = {"value": builtins[key], "source": SRC_MANUAL}
+            else:
+                result[variable] = {"value": builtins[key], "source": SRC_NETBOX}
+            continue
+        path = mappings.get(variable)
+        value = resolve_path(context, path) if path else None
+        if value is not None:
+            result[variable] = {"value": value, "source": SRC_MAPPED}
+        else:
+            result[variable] = {"value": "", "source": SRC_MANUAL}
+    return result
+
+
 def build_claim_payload(
-    device: JobDevice, *, config_id: str, image_id: str | None
+    device: JobDevice,
+    *,
+    config_id: str,
+    image_id: str | None,
+    overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Site-claim payload per CLAUDE.md §6.1 with NetBox-prefilled variables."""
+    """Site-claim payload per CLAUDE.md §6.1.
+
+    Uses the resolved `day0_variables` (template introspection) when present,
+    applying operator `overrides` for open fields; empty values are omitted.
+    Falls back to the legacy fixed HOSTNAME/MGMT_IP/MGMT_MASK/MGMT_VLAN set when
+    the job was claimed without a prepare step."""
     if device.match_status != MATCHED:
         raise ConfigurationError(f"Device {device.serial} is not matched — cannot claim.")
     if not device.ccc_site_id:
         raise ConfigurationError(f"Device {device.serial} has no mapped CCC site.")
 
     parameters: list[dict[str, str]] = []
-    if device.netbox_name:
-        parameters.append({"key": "HOSTNAME", "value": device.netbox_name})
-    if device.mgmt_ip:
-        interface = ipaddress.ip_interface(device.mgmt_ip)
-        parameters.append({"key": "MGMT_IP", "value": str(interface.ip)})
-        parameters.append({"key": "MGMT_MASK", "value": str(interface.network.netmask)})
-        gateway = None  # not derivable from NetBox data yet; Day-N mapping can supply it
-        if gateway:
-            parameters.append({"key": "GATEWAY", "value": gateway})
-    if device.mgmt_vlan is not None:
-        parameters.append({"key": "MGMT_VLAN", "value": str(device.mgmt_vlan)})
+    if device.day0_variables:
+        overrides = overrides or {}
+        for variable, info in device.day0_variables.items():
+            value = overrides.get(variable, info.get("value") or "")
+            if value != "":
+                parameters.append({"key": variable, "value": str(value)})
+    else:
+        for variable, value in day0_builtins(device).items():
+            key = {
+                "hostname": "HOSTNAME",
+                "mgmt_ip": "MGMT_IP",
+                "mgmt_mask": "MGMT_MASK",
+                "mgmt_vlan": "MGMT_VLAN",
+            }.get(variable)
+            if key:  # gateway/prefix are omitted in the legacy fallback
+                parameters.append({"key": key, "value": value})
 
     return {
         "deviceId": device.ccc_device_id,

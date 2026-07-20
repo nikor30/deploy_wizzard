@@ -30,6 +30,7 @@ interface JobDevice {
   vlan_options: VlanOption[]
   state: string
   error: string | null
+  day0_variables: Record<string, { value: string | null; source: string }> | null
   dayn_variables: Record<
     string,
     { value: string | null; source: 'mapped' | 'manual' | 'secret' }
@@ -578,14 +579,55 @@ function Day0View({
   const [imageId, setImageId] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [running, setRunning] = useState(initialJob.status === 'day0_running')
+  const [preparing, setPreparing] = useState(false)
+  const [prepared, setPrepared] = useState(false)
+  const [manual, setManual] = useState<Record<number, Record<string, string>>>({})
+  const [debug, setDebug] = useState(false)
 
   useEffect(() => {
     fetchJson<Day0Template[]>('/api/wizard/day0/templates')
       .then(setTemplates)
       .catch((err: Error) => setError(err.message))
+    fetchJson<{ debug: boolean }>('/api/settings/flags')
+      .then((f) => setDebug(f.debug))
+      .catch(() => setDebug(false))
   }, [])
 
   useJobWatch(job.id, running, setJob, setRunning)
+
+  const prepare = async (templateId: string) => {
+    setConfigId(templateId)
+    setPrepared(false)
+    if (!templateId) return
+    setPreparing(true)
+    setError(null)
+    try {
+      const result = await fetchJson<Job>(`/api/wizard/jobs/${job.id}/day0/prepare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config_id: templateId }),
+      })
+      setJob(result)
+      // seed editable manual/gateway fields with their suggested values
+      const seeded: Record<number, Record<string, string>> = {}
+      for (const device of result.devices) {
+        if (!device.day0_variables) continue
+        seeded[device.id] = {}
+        for (const [variable, info] of Object.entries(device.day0_variables)) {
+          if (info.source === 'manual') seeded[device.id][variable] = info.value ?? ''
+        }
+      }
+      setManual(seeded)
+      setPrepared(true)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setPreparing(false)
+    }
+  }
+
+  const setManualValue = (deviceId: number, variable: string, value: string) =>
+    setManual((prev) => ({ ...prev, [deviceId]: { ...(prev[deviceId] ?? {}), [variable]: value } }))
 
   const start = async () => {
     setError(null)
@@ -593,7 +635,7 @@ function Day0View({
       const started = await fetchJson<Job>(`/api/wizard/jobs/${job.id}/claim`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ config_id: configId, image_id: imageId || null }),
+        body: JSON.stringify({ config_id: configId, image_id: imageId || null, manual }),
       })
       setJob(started)
       setRunning(true)
@@ -622,7 +664,7 @@ function Day0View({
               <select
                 className="mt-1 block w-72 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
                 value={configId}
-                onChange={(e) => setConfigId(e.target.value)}
+                onChange={(e) => void prepare(e.target.value)}
               >
                 <option value="">— select template —</option>
                 {(templates ?? []).map((template) => (
@@ -647,6 +689,10 @@ function Day0View({
         </section>
       )}
 
+      {!running && !finished && preparing && (
+        <p className="mt-4 text-sm text-slate-400">Resolving template variables…</p>
+      )}
+
       <div className="mt-4 flex flex-col gap-3">
         {claimable.map((device) => (
           <section
@@ -665,6 +711,36 @@ function Day0View({
             {device.error && (
               <p className="mt-2 text-sm text-rose-700 dark:text-rose-300">{device.error}</p>
             )}
+            {!running && !finished && prepared && device.day0_variables && (
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {Object.entries(device.day0_variables).map(([variable, info]) =>
+                  info.source === 'manual' ? (
+                    <label key={variable} className="block">
+                      <span className="text-xs text-amber-600 uppercase dark:text-amber-400">
+                        {variable} {debug ? '· open' : ''}
+                      </span>
+                      <input
+                        type="text"
+                        aria-label={`${variable} for ${device.serial}`}
+                        className="mt-1 block w-full rounded-md border border-amber-300 bg-white px-2 py-1.5 text-sm dark:border-amber-700 dark:bg-slate-900"
+                        placeholder={variable.toUpperCase().includes('GATEWAY') ? 'gateway' : ''}
+                        value={manual[device.id]?.[variable] ?? ''}
+                        onChange={(e) => setManualValue(device.id, variable, e.target.value)}
+                      />
+                    </label>
+                  ) : (
+                    <div key={variable}>
+                      <span className="text-xs text-slate-400 uppercase">
+                        {variable} {debug ? `· ${info.source}` : ''}
+                      </span>
+                      <p className="mt-1 rounded-md bg-slate-50 px-2 py-1.5 font-mono text-sm dark:bg-slate-800">
+                        {info.value}
+                      </p>
+                    </div>
+                  ),
+                )}
+              </div>
+            )}
           </section>
         ))}
       </div>
@@ -678,7 +754,7 @@ function Day0View({
             <button
               type="button"
               className={buttonPrimary}
-              disabled={!configId}
+              disabled={!configId || preparing || !prepared}
               onClick={() => void start()}
             >
               Start Day-0 claim ({claimable.length} device(s))

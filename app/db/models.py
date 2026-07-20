@@ -60,6 +60,7 @@ class JobDevice(Base):
     error: Mapped[str | None] = mapped_column(String(2048))
     day0_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     day0_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    day0_variables: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     dayn_variables: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     dayn_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     dayn_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -110,6 +111,15 @@ class TemplateSecret(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
+
+
+class AppSetting(Base):
+    """Simple key/value store for app-wide flags (e.g. the variable debug view)."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(256))
 
 
 class WebhookDelivery(Base):

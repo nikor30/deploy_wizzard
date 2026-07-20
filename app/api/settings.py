@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.clients.catalyst import CatalystCenterClient
 from app.clients.netbox import NetBoxClient
 from app.crypto import mask_secret
-from app.db.models import DayNMapping, ServiceSettings, TemplateSecret
+from app.db.models import AppSetting, DayNMapping, ServiceSettings, TemplateSecret
 from app.db.session import get_db
 from app.errors import PnPBridgeError
 from app.services import settings_store
@@ -363,3 +363,32 @@ def delete_template_secret(name: str, db: DbSession) -> None:
     db.delete(row)
     db.flush()
     logger.info("Deleted template secret", extra={"secret_name": name})
+
+
+class AppFlags(BaseModel):
+    # global "debug" view: show the source of every wizard variable
+    # (netbox / mapped / manual) so operators can verify Day-0/Day-N coverage
+    debug: bool = False
+
+
+def _flag(db: Session, key: str) -> bool:
+    row = db.get(AppSetting, key)
+    return row is not None and row.value == "true"
+
+
+@router.get("/flags")
+def get_flags(db: DbSession) -> AppFlags:
+    return AppFlags(debug=_flag(db, "debug"))
+
+
+@router.put("/flags")
+def put_flags(payload: AppFlags, db: DbSession) -> AppFlags:
+    value = "true" if payload.debug else "false"
+    row = db.get(AppSetting, "debug")
+    if row is None:
+        db.add(AppSetting(key="debug", value=value))
+    else:
+        row.value = value
+    db.flush()
+    logger.info("Set debug flag to %s", payload.debug)
+    return AppFlags(debug=payload.debug)
