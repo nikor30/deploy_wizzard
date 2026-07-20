@@ -126,7 +126,7 @@ export default function SettingsDayN() {
       setNewSecretValue('')
       setBanner({
         ok: true,
-        detail: `Secret '${saved.name}' stored — map it as secret.${saved.name}`,
+        detail: `Secret '${saved.name}' stored — it auto-fills any template variable named ${saved.name}`,
       })
     } catch (err) {
       setBanner({ ok: false, detail: (err as Error).message })
@@ -226,12 +226,14 @@ export default function SettingsDayN() {
         aria-label="Template secrets"
         className="mt-6 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
       >
-        <h2 className="font-semibold">Template secrets</h2>
+        <h2 className="font-semibold">Global variables &amp; secrets</h2>
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          Store keys and passwords (RADIUS/TACACS keys, SNMP communities, AES keys, …) encrypted
-          here and map them to template variables as <code>secret.&lt;name&gt;</code>. Values are
-          write-only: they show up masked everywhere and are only decrypted for the deploy call to
-          Catalyst Center.
+          Store keys and passwords (AES encryption key, RADIUS/TACACS keys, SNMP communities, …)
+          once, encrypted. A secret{' '}
+          <strong>auto-fills any Day-0 or Day-N template variable with the same name</strong> — e.g.
+          name it <code>AES_ENCRYPTION_KEY</code> and it fills that variable everywhere — or
+          reference it explicitly as <code>secret.&lt;name&gt;</code>. Values are write-only: masked
+          everywhere and decrypted only for the deploy/claim call to Catalyst Center.
         </p>
         <ul className="mt-3 flex flex-col gap-1">
           {secrets.map((s) => (

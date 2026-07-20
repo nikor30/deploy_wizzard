@@ -63,8 +63,11 @@ def resolve_variables(
 
     `secret.<NAME>` paths resolve to a masked placeholder — the plaintext is
     decrypted just-in-time when building the deploy payload, never stored on
-    the job or returned by the API."""
+    the job or returned by the API. A secret whose name matches a template
+    variable also auto-fills it (a "global variable" set once, used everywhere)
+    without an explicit mapping."""
     known_secrets = set(secret_names)
+    by_norm = {"".join(c for c in n.upper() if c.isalnum()): n for n in known_secrets}
     result: dict[str, dict[str, Any]] = {}
     for variable in variables:
         path = mappings.get(variable)
@@ -76,10 +79,14 @@ def resolve_variables(
                 result[variable] = {"value": None, "source": MANUAL}
             continue
         value = resolve_path(context, path) if path else None
-        result[variable] = {
-            "value": value,
-            "source": MAPPED if value is not None else MANUAL,
-        }
+        if value is not None:
+            result[variable] = {"value": value, "source": MAPPED}
+            continue
+        norm = "".join(c for c in variable.upper() if c.isalnum())
+        if norm in by_norm:
+            result[variable] = {"value": SECRET_MASK, "source": SECRET, "secret": by_norm[norm]}
+        else:
+            result[variable] = {"value": None, "source": MANUAL}
     return result
 
 

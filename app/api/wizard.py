@@ -295,13 +295,16 @@ async def prepare_day0(job_id: int, payload: Day0PrepareRequest, db: DbSession) 
         if p.get("parameterName")
     ]
     mappings = {m.variable: m.source_path for m in db.scalars(select(DayNMapping)).all()}
+    secret_names = set(db.scalars(select(TemplateSecret.name)).all())
     async with get_netbox_client(db) as netbox:
         for device in matched:
             context: dict[str, Any] = {"device": {}}
             if device.netbox_device_id is not None:
                 netbox_device = await netbox.get_device(device.netbox_device_id)
                 context = await load_device_context(netbox, netbox_device)
-            device.day0_variables = resolve_day0_variables(variables, device, context, mappings)
+            device.day0_variables = resolve_day0_variables(
+                variables, device, context, mappings, secret_names
+            )
     job.day0_config_id = payload.config_id
     db.flush()
     return _job_out(job)
