@@ -132,12 +132,26 @@ export default function SettingsCredentials() {
   const [saveState, setSaveState] = useState<TestResult | null>(null)
   const [testResults, setTestResults] = useState<Partial<Record<ServiceKey, TestResult>>>({})
   const [busy, setBusy] = useState<string | null>(null)
+  const [debug, setDebug] = useState(false)
 
   useEffect(() => {
     getCredentials()
       .then((credentials) => setForm(toForm(credentials)))
       .catch((err: Error) => setLoadError(err.message))
+    fetch('/api/settings/flags')
+      .then((r) => r.json())
+      .then((f: { debug: boolean }) => setDebug(f.debug))
+      .catch(() => setDebug(false))
   }, [])
+
+  const toggleDebug = async (value: boolean) => {
+    setDebug(value)
+    await fetch('/api/settings/flags', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ debug: value }),
+    }).catch(() => setDebug(!value))
+  }
 
   if (loadError) {
     return <StatusBanner result={{ ok: false, detail: `Cannot load settings: ${loadError}` }} />
@@ -303,6 +317,22 @@ export default function SettingsCredentials() {
               id="webhook-enabled"
               checked={form.webhook.enabled}
               onChange={(v) => update('webhook', { enabled: v })}
+            />
+          </div>
+        </section>
+
+        <section className={cardClass} aria-label="Debug">
+          <h2 className="text-lg font-semibold">Debug</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Show the source of every wizard variable (netbox / mapped / manual) in the Day-0 and
+            Day-N steps, so you can check what the tool prefilled and what is still open.
+          </p>
+          <div className="mt-3">
+            <Toggle
+              label="Show variable sources (debug)"
+              id="debug-flag"
+              checked={debug}
+              onChange={(v) => void toggleDebug(v)}
             />
           </div>
         </section>

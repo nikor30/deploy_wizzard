@@ -575,3 +575,29 @@ production tool, plus a way to verify against a real device before deploying.
 TenGigabitEthernet1/1/1`, `uplink_switch=dist-ffm-01`,
 `site_vlans=(110,MGMT);(120,USERS)`, `support_contact=Ladislav Fekete`, matching
 the All_templates.csv columns.
+
+## Day-0 template variable preview + gateway + debug switch (v1.5.0) ✅
+
+Live feedback on the Day-0 claim step: preview the selected template's
+variables (prefilled vs open), let the operator fill open ones (the gateway was
+missing), and a global debug switch to inspect what's needed/prefilled/open.
+
+- [x] `resolve_day0_variables` / `day0_builtins`: introspect the Day-0
+  template's variables and resolve each — built-in onboarding values by name
+  alias (HOSTNAME/MGMT_IP/MASK/PREFIX/VLAN), then a Day-N dot-path mapping,
+  else open manual; `gateway` guessed as the mgmt subnet's first host and left
+  editable
+- [x] `POST /jobs/{id}/day0/prepare {config_id}` stores per-device
+  `day0_variables`; claim accepts `manual` overrides and persists them;
+  `build_claim_payload` sends the resolved+overridden set (empty omitted),
+  legacy fallback preserved
+- [x] Wizard Day-0 step: selecting a template previews the variables
+  (prefilled read-only + editable manual incl. gateway), start gated on prepare
+- [x] Global debug flag (`AppSetting` + `GET/PUT /api/settings/flags`), toggle
+  on the Credentials page; when on, Day-0/Day-N show each variable's source
+- [x] migration 0009; 157 pytest / 35 vitest / 4 e2e green
+
+**Demo:** pick the Day-0 template → the wizard shows HOSTNAME/MGMT_IP/MASK/VLAN
+prefilled from NetBox and GATEWAY as an editable field pre-filled with the
+subnet's .1; enable debug on Settings → Credentials to see each variable's
+source badge.

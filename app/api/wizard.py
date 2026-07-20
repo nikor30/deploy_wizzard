@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.db.models import DayNMapping, Job, JobDevice, SiteMapping, TemplateSecret
 from app.db.session import get_db, open_session
 from app.services.connections import get_catalyst_client, get_netbox_client
-from app.services.day0 import run_day0
+from app.services.day0 import resolve_day0_variables, run_day0
 from app.services.dayn import (
     MANUAL,
     SECRET,
@@ -68,6 +68,7 @@ class JobDeviceOut(BaseModel):
     vlan_options: list[dict[str, Any]]
     state: str
     error: str | None
+    day0_variables: dict[str, dict[str, Any]] | None
     dayn_variables: dict[str, dict[str, Any]] | None
 
 
@@ -102,6 +103,7 @@ def _device_out(device: JobDevice) -> JobDeviceOut:
         vlan_options=device.vlan_options or [],
         state=device.state,
         error=device.error,
+        day0_variables=device.day0_variables,
         dayn_variables=device.dayn_variables,
     )
 
@@ -261,11 +263,48 @@ class Day0Template(BaseModel):
     project: str | None = None
 
 
+class Day0PrepareRequest(BaseModel):
+    config_id: str
+
+
 class ClaimRequest(BaseModel):
     config_id: str
     image_id: str | None = None
+    # device_id -> {variable: manual value} for open Day-0 variables
+    manual: dict[int, dict[str, str]] = {}
     poll_interval: float | None = None
     timeout: float | None = None
+
+
+@router.post("/jobs/{job_id}/day0/prepare")
+async def prepare_day0(job_id: int, payload: Day0PrepareRequest, db: DbSession) -> JobOut:
+    """Introspect the chosen Day-0 template's variables and resolve them per
+    matched device (built-in onboarding values → Day-N mapping → manual), so
+    the operator can review what is prefilled and fill any open fields
+    (e.g. the gateway) before claiming."""
+    job = _get_job(db, job_id)
+    matched = [d for d in job.devices if d.match_status == MATCHED]
+    if not matched:
+        raise HTTPException(status_code=422, detail="No matched devices to claim.")
+
+    async with get_catalyst_client(db) as catalyst:
+        template = await catalyst.get_template(payload.config_id)
+    variables = [
+        str(p.get("parameterName"))
+        for p in template.get("templateParams", [])
+        if p.get("parameterName")
+    ]
+    mappings = {m.variable: m.source_path for m in db.scalars(select(DayNMapping)).all()}
+    async with get_netbox_client(db) as netbox:
+        for device in matched:
+            context: dict[str, Any] = {"device": {}}
+            if device.netbox_device_id is not None:
+                netbox_device = await netbox.get_device(device.netbox_device_id)
+                context = await load_device_context(netbox, netbox_device)
+            device.day0_variables = resolve_day0_variables(variables, device, context, mappings)
+    job.day0_config_id = payload.config_id
+    db.flush()
+    return _job_out(job)
 
 
 @router.get("/day0/templates")
@@ -303,6 +342,14 @@ def claim_job(
     for device in claimable:
         device.state = "queued"
         device.error = None
+        # merge the operator's manual values into the resolved Day-0 variables
+        overrides = payload.manual.get(device.id, {})
+        if device.day0_variables and overrides:
+            merged = {k: dict(v) for k, v in device.day0_variables.items()}
+            for variable, value in overrides.items():
+                if variable in merged:
+                    merged[variable]["value"] = value
+            device.day0_variables = merged
     # Commit now: the background task opens its own sessions and must not
     # contend with this request's still-open write transaction.
     db.commit()
