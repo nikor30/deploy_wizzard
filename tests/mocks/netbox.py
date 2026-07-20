@@ -141,10 +141,9 @@ def create_netbox_app() -> FastAPI:
         request: Request,
         object_type: str | None = None,
         object_id: int | None = None,
-        role: str | None = None,
     ) -> dict[str, Any]:
         _check_token(request)
-        if object_type == "dcim.site" and (role in (None, "Local IT")):
+        if object_type == "dcim.site":
             return _page(
                 [
                     {

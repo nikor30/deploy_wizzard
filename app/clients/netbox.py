@@ -1,5 +1,6 @@
 """NetBox v4.x REST client (token auth: 'Authorization: Token <key>')."""
 
+import logging
 from types import TracebackType
 from typing import Any
 
@@ -7,6 +8,8 @@ import httpx
 
 from app.clients.base import DEFAULT_TIMEOUT, get_with_retries
 from app.errors import NetBoxAuthError, NetBoxError, NetBoxNotFound
+
+logger = logging.getLogger(__name__)
 
 
 class NetBoxClient:
@@ -110,15 +113,26 @@ class NetBoxClient:
         return await self._get_paginated("/api/ipam/vlans/", params={"site_id": site_id})
 
     async def get_contact_assignments(
-        self, object_type: str, object_id: int, role: str | None = None
+        self, object_type: str, object_id: int
     ) -> list[dict[str, Any]]:
-        """Contact assignments for a NetBox object (v4.x tenancy). `object_type`
-        is e.g. 'dcim.site' or 'dcim.device'; `role` filters by contact-role
-        name. Used to derive the Day-N support_contact variable."""
-        params: dict[str, Any] = {"object_type": object_type, "object_id": object_id}
-        if role:
-            params["role"] = role
-        return await self._get_paginated("/api/tenancy/contact-assignments/", params=params)
+        """Contact assignments for a NetBox object (`object_type` is e.g.
+        'dcim.site' or 'dcim.device'). Used to derive the Day-N support_contact
+        variable — role filtering is done by the caller, not the API.
+
+        The object filter param renamed across NetBox versions (`content_type`
+        pre-4.x → `object_type` in 4.x), and strict-filter builds return HTTP
+        400 for the wrong one, so both are attempted. Any failure (unsupported
+        endpoint, permissions) degrades to an empty list rather than breaking
+        the caller."""
+        for type_param in ("object_type", "content_type"):
+            try:
+                return await self._get_paginated(
+                    "/api/tenancy/contact-assignments/",
+                    params={type_param: object_type, "object_id": object_id},
+                )
+            except NetBoxError as exc:
+                logger.warning("contact-assignments via %s failed: %s", type_param, exc)
+        return []
 
     async def get_ip_addresses(self, device_id: int) -> list[dict[str, Any]]:
         return await self._get_paginated("/api/ipam/ip-addresses/", params={"device_id": device_id})

@@ -154,26 +154,48 @@ def build_device_context(
 SUPPORT_CONTACT_ROLE = "Local IT"
 
 
+async def _safe(coro: Any, what: str) -> list[dict[str, Any]]:
+    """Run an optional NetBox enrichment call; a NetBox error degrades to an
+    empty list so one unsupported endpoint never breaks variable resolution."""
+    try:
+        return list(await coro)
+    except PnPBridgeError as exc:
+        logger.warning("Skipping %s enrichment: %s", what, exc)
+        return []
+
+
 async def load_device_context(netbox: NetBoxClient, device: dict[str, Any]) -> dict[str, Any]:
     """Fetch the extra NetBox data a device's Day-N variables need — interfaces
     (uplinks), the site's VLANs, and support contacts — and build the full
-    resolution context. Missing pieces degrade to empty, never raise."""
+    resolution context. Every piece degrades to empty on error, never raises,
+    so preview/suggest keep working even if an endpoint is unavailable."""
     device_id = device.get("id")
     interfaces: list[dict[str, Any]] = []
     site_vlans: list[dict[str, Any]] = []
     contacts: list[dict[str, Any]] = []
     if device_id is not None:
-        interfaces = await netbox.get_interfaces(int(device_id))
+        interfaces = await _safe(netbox.get_interfaces(int(device_id)), "interfaces")
     site_id = (device.get("site") or {}).get("id")
     if site_id is not None:
-        site_vlans = await netbox.get_vlans(int(site_id))
-        contacts = await netbox.get_contact_assignments(
-            "dcim.site", int(site_id), role=SUPPORT_CONTACT_ROLE
+        site_vlans = await _safe(netbox.get_vlans(int(site_id)), "site VLANs")
+        site_contacts = await _safe(
+            netbox.get_contact_assignments("dcim.site", int(site_id)), "site contacts"
         )
+        # site contact with role "Local IT" (see netbox_cc_dayn mappings.yaml)
+        contacts = [c for c in site_contacts if _contact_role(c) == SUPPORT_CONTACT_ROLE]
     if not contacts and device_id is not None:
         # fall back to a device-level contact (any role)
-        contacts = await netbox.get_contact_assignments("dcim.device", int(device_id))
+        contacts = await _safe(
+            netbox.get_contact_assignments("dcim.device", int(device_id)), "device contacts"
+        )
     return build_device_context(device, interfaces, site_vlans, contacts)
+
+
+def _contact_role(assignment: dict[str, Any]) -> str | None:
+    role = assignment.get("role")
+    if isinstance(role, dict):
+        return role.get("name")
+    return role if isinstance(role, str) else None
 
 
 def _resolve_contact(device: dict[str, Any], contacts: list[dict[str, Any]] | None) -> str | None:

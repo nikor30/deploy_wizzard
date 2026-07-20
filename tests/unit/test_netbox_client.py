@@ -87,3 +87,30 @@ async def test_unreachable_host_raises_netbox_error() -> None:
     async with NetBoxClient(BASE, "tok") as client:
         with pytest.raises(NetBoxError, match="Cannot reach"):
             await client.test_connection()
+
+
+@respx.mock
+async def test_contact_assignments_falls_back_content_type_then_empty() -> None:
+    """object_type/content_type filter name differs by NetBox version; a 400
+    on one is retried with the other, and total failure degrades to []."""
+    route = respx.get(f"{BASE}/api/tenancy/contact-assignments/")
+    route.side_effect = [
+        httpx.Response(400),  # object_type rejected
+        httpx.Response(
+            200,
+            json={"results": [{"contact": {"name": "Local Admin"}}], "next": None},
+        ),
+    ]
+    async with NetBoxClient(BASE, "tok") as client:
+        result = await client.get_contact_assignments("dcim.site", 10)
+    assert [c["contact"]["name"] for c in result] == ["Local Admin"]
+    first, second = (call.request.url.params for call in route.calls)
+    assert "object_type" in first
+    assert "content_type" in second
+
+
+@respx.mock
+async def test_contact_assignments_both_400_returns_empty() -> None:
+    respx.get(f"{BASE}/api/tenancy/contact-assignments/").respond(400)
+    async with NetBoxClient(BASE, "tok") as client:
+        assert await client.get_contact_assignments("dcim.site", 10) == []
