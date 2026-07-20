@@ -296,6 +296,50 @@ def test_preview_resolves_current_mappings_against_a_real_serial(client: TestCli
     assert manual["patch_field"] == "manual"
 
 
+def test_preview_survives_contact_assignments_400(client: TestClient) -> None:
+    """Regression: some NetBox versions 400 on /tenancy/contact-assignments/.
+    That must not break the whole preview — support_contact falls back to the
+    tenant, everything else still resolves."""
+    _store_creds(client)
+    client.put(
+        "/api/settings/dayn",
+        json={
+            "mappings": [
+                {"variable": "site_full_name", "source_path": "device.site.name"},
+                {"variable": "support_contact", "source_path": "device.support_contact"},
+            ]
+        },
+    )
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="testserver").pass_through()
+        respx_mock.get(f"{NETBOX}/api/dcim/devices/").respond(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": 1001,
+                        "name": "sw-1",
+                        "serial": "SN1",
+                        "site": {"id": 10, "name": "FFM-DC1"},
+                        "tenant": {"name": "IT Operations"},
+                    }
+                ],
+                "next": None,
+            },
+        )
+        respx_mock.get(f"{NETBOX}/api/dcim/interfaces/").respond(
+            200, json={"results": [], "next": None}
+        )
+        respx_mock.get(f"{NETBOX}/api/ipam/vlans/").respond(200, json={"results": [], "next": None})
+        respx_mock.get(f"{NETBOX}/api/tenancy/contact-assignments/").respond(400, json={})
+        response = client.post("/api/settings/dayn/preview", json={"serial": "SN1"})
+    assert response.status_code == 200, response.text
+    values = {v["variable"]: v["value"] for v in response.json()["variables"]}
+    assert values["site_full_name"] == "FFM-DC1"
+    # degraded gracefully to the tenant name instead of erroring
+    assert values["support_contact"] == "IT Operations"
+
+
 def test_preview_unknown_serial_is_404(client: TestClient) -> None:
     _store_creds(client)
     with respx.mock(assert_all_called=False) as respx_mock:
