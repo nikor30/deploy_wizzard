@@ -30,7 +30,10 @@ interface JobDevice {
   vlan_options: VlanOption[]
   state: string
   error: string | null
-  day0_variables: Record<string, { value: string | null; source: string }> | null
+  day0_variables: Record<
+    string,
+    { value: string | null; source: string; choices?: string[] }
+  > | null
   dayn_variables: Record<
     string,
     { value: string | null; source: 'mapped' | 'manual' | 'secret' }
@@ -719,14 +722,29 @@ function Day0View({
                       <span className="text-xs text-amber-600 uppercase dark:text-amber-400">
                         {variable} {debug ? '· open' : ''}
                       </span>
-                      <input
-                        type="text"
-                        aria-label={`${variable} for ${device.serial}`}
-                        className="mt-1 block w-full rounded-md border border-amber-300 bg-white px-2 py-1.5 text-sm dark:border-amber-700 dark:bg-slate-900"
-                        placeholder={variable.toUpperCase().includes('GATEWAY') ? 'gateway' : ''}
-                        value={manual[device.id]?.[variable] ?? ''}
-                        onChange={(e) => setManualValue(device.id, variable, e.target.value)}
-                      />
+                      {info.choices ? (
+                        <select
+                          aria-label={`${variable} for ${device.serial}`}
+                          className="mt-1 block w-full rounded-md border border-amber-300 bg-white px-2 py-1.5 text-sm dark:border-amber-700 dark:bg-slate-900"
+                          value={manual[device.id]?.[variable] ?? info.value ?? ''}
+                          onChange={(e) => setManualValue(device.id, variable, e.target.value)}
+                        >
+                          {info.choices.map((choice) => (
+                            <option key={choice} value={choice}>
+                              {choice}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          aria-label={`${variable} for ${device.serial}`}
+                          className="mt-1 block w-full rounded-md border border-amber-300 bg-white px-2 py-1.5 text-sm dark:border-amber-700 dark:bg-slate-900"
+                          placeholder={variable.toUpperCase().includes('GATEWAY') ? 'gateway' : ''}
+                          value={manual[device.id]?.[variable] ?? ''}
+                          onChange={(e) => setManualValue(device.id, variable, e.target.value)}
+                        />
+                      )}
                     </label>
                   ) : (
                     <div key={variable}>

@@ -70,6 +70,7 @@ const preparedDay0Job = {
           day0_variables: {
             HOSTNAME: { value: 'sw-ffm-01', source: 'netbox' },
             GATEWAY: { value: '172.20.10.1', source: 'manual' },
+            CAMPUSSWITCH: { value: 'no', source: 'manual', choices: ['no', 'yes'] },
           },
         }
       : d,
@@ -195,6 +196,12 @@ describe('Wizard', () => {
     await userEvent.clear(gateway)
     await userEvent.type(gateway, '172.20.10.254')
 
+    // campusswitch is a yes/no picker (not derived from the NetBox role)
+    const campus = screen.getByLabelText(/CAMPUSSWITCH for FCW1234ABCD/i)
+    expect(campus.tagName).toBe('SELECT')
+    expect(campus).toHaveValue('no')
+    await userEvent.selectOptions(campus, 'yes')
+
     await waitFor(() => expect(startButton).toBeEnabled())
     await userEvent.click(startButton)
 
@@ -202,7 +209,7 @@ describe('Wizard', () => {
     expect(JSON.parse((claimCall![1] as RequestInit).body as string)).toEqual({
       config_id: 'tmpl-1',
       image_id: null,
-      manual: { 71: { GATEWAY: '172.20.10.254' } },
+      manual: { 71: { GATEWAY: '172.20.10.254', CAMPUSSWITCH: 'yes' } },
     })
 
     // Polling fallback (no EventSource in jsdom) picks up the terminal snapshot

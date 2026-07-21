@@ -9,6 +9,7 @@ import ipaddress
 import logging
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from itertools import pairwise
 from typing import Any
 
 from sqlalchemy import select
@@ -74,12 +75,10 @@ DAY0_ALIASES: dict[str, str] = {
 }
 
 # Variables whose value comes from the NetBox device context by dot-path
-# (not from the JobDevice match row). Role covers switchType/campusswitch.
+# (not from the JobDevice match row). Role covers switchType.
 DAY0_CONTEXT_ALIASES: dict[str, str] = {
     "SWITCHTYPE": "device.role.name",
     "SWITCHTYP": "device.role.name",
-    "CAMPUSSWITCH": "device.role.name",
-    "CAMPUSSUPSWITCH": "device.role.name",
     "DEVICEROLE": "device.role.name",
     "ROLE": "device.role.name",
     "SITE": "device.site.name",
@@ -87,9 +86,40 @@ DAY0_CONTEXT_ALIASES: dict[str, str] = {
     "RACK": "device.rack.name",
 }
 
+# Variables the operator picks from a fixed list rather than typing freely or
+# deriving from NetBox. `campusswitch` is a yes/no decision, not a role lookup.
+DAY0_CHOICE_VARS: dict[str, list[str]] = {
+    "CAMPUSSWITCH": ["no", "yes"],
+    "CAMPUSSUPSWITCH": ["no", "yes"],
+}
+
 
 def _normalize_var(name: str) -> str:
     return "".join(c for c in name.upper() if c.isalnum())
+
+
+def _looks_like_junk_var(name: str) -> bool:
+    """Detect the garbled variable names Catalyst Center generates from password
+    values (e.g. ``pPYzdaRZdKO5gppL7ddKhk3iF``, ``OaMGKyQBNwDjxFcagpT``). These
+    are noise leaked into the template's parameter list and must never be shown
+    to the operator or sent in a claim. Operates on the ORIGINAL mixed-case name
+    (case pattern is the tell), never the normalized form.
+
+    A name is junk when it is a single opaque token: no separators, long, mixed
+    upper/lower case, and either contains digits or flips case many times — the
+    fingerprint of a random secret, not a human-authored variable name."""
+    if any(sep in name for sep in "_-. /:"):
+        return False
+    if len(name) < 16:
+        return False
+    has_upper = any(c.isupper() for c in name)
+    has_lower = any(c.islower() for c in name)
+    if not (has_upper and has_lower):
+        return False
+    has_digit = any(c.isdigit() for c in name)
+    letters = [c for c in name if c.isalpha()]
+    case_transitions = sum(1 for a, b in pairwise(letters) if a.isupper() != b.isupper())
+    return has_digit or case_transitions >= 5
 
 
 def day0_builtins(device: JobDevice) -> dict[str, str]:
@@ -126,14 +156,17 @@ def resolve_day0_variables(
     secret_names: Iterable[str] = (),
 ) -> dict[str, dict[str, Any]]:
     """Resolve each Day-0 template variable, in order:
-    built-in onboarding value (by name alias) → NetBox context alias
-    (role/site/…) → explicit Day-N dot-path mapping → global variable / secret
-    matched by name (set once, masked) → open for manual entry. `gateway` is a
-    guess and stays editable (source `manual`)."""
+    garbled password-leak names are dropped entirely → built-in onboarding value
+    (by name alias) → NetBox context alias (role/site/…) → explicit Day-N
+    dot-path mapping → fixed-choice picker (campusswitch yes/no) → global
+    variable / secret matched by name (set once, masked) → open for manual
+    entry. `gateway` is a guess and stays editable (source `manual`)."""
     builtins = day0_builtins(device)
     secrets_by_norm = {_normalize_var(name): name for name in secret_names}
     result: dict[str, dict[str, Any]] = {}
     for variable in variables:
+        if _looks_like_junk_var(variable):
+            continue
         norm = _normalize_var(variable)
         key = DAY0_ALIASES.get(norm)
         if key and key in builtins:
@@ -149,6 +182,14 @@ def resolve_day0_variables(
         value = resolve_path(context, path) if path else None
         if value is not None:
             result[variable] = {"value": value, "source": SRC_MAPPED}
+            continue
+        choices = DAY0_CHOICE_VARS.get(norm)
+        if choices is not None:
+            result[variable] = {
+                "value": choices[0],
+                "source": SRC_MANUAL,
+                "choices": list(choices),
+            }
             continue
         if norm in secrets_by_norm:
             result[variable] = {
