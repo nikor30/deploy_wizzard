@@ -175,6 +175,23 @@ def test_mgmt_subnet_override_still_wins_over_claim_value() -> None:
     assert params["MGMT_SUBNET"] == "255.255.252.0"
 
 
+def test_claim_payload_sets_device_hostname_from_netbox() -> None:
+    """The Webasto template has no hostname variable; CCC's SET_HOSTNAME reads
+    the PnP device name, so the claim must carry the NetBox name at top level or
+    the box keeps its default 'Switch' hostname."""
+    device = _device(netbox_name="sw-vel-051")
+    device.day0_variables = {"MGMT_IP": {"value": "172.20.10.5", "source": "netbox"}}
+    payload = build_claim_payload(device, config_id="tpl-0", image_id=None)
+    assert payload["hostname"] == "sw-vel-051"
+
+
+def test_claim_payload_omits_hostname_when_no_netbox_name() -> None:
+    device = _device(netbox_name=None)
+    device.day0_variables = {"MGMT_IP": {"value": "172.20.10.5", "source": "netbox"}}
+    payload = build_claim_payload(device, config_id="tpl-0", image_id=None)
+    assert "hostname" not in payload
+
+
 def test_claim_payload_decrypts_global_secret_values() -> None:
     device = _device()
     device.day0_variables = {

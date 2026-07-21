@@ -659,3 +659,19 @@ Live claim failed with PnP error 1413 — CCC ran `ip address 172.20.10.249
 **Demo:** for a device on 172.20.10.0/24, the preview shows MGMT_SUBNET as
 `172.20.10.0/24` but the claim sends `255.255.255.0`, so `ip address` applies
 cleanly.
+
+## Day-0 fix: set the device hostname at claim (v1.6.3) ✅
+
+A device onboarded via Day-0 but kept the default IOS hostname `Switch` — the
+NetBox name never reached the box. The `00_Webasto_OnBoarding` template has no
+hostname variable; its `SET_HOSTNAME` task reads the PnP device record's name
+(the "Device Name" in the claim UI), which the tool never set.
+
+- [x] `build_claim_payload` now adds a top-level `hostname` (the NetBox device
+  name) to the site-claim payload — the standard CCC PnP mechanism — omitted
+  when there is no NetBox name
+- [x] Mock CCC applies the claim `hostname` to the device record
+- [x] 172 pytest / 35 vitest / 4 e2e green
+
+**Demo:** claiming SVEL051-style device now sends `hostname: sw-vel-051` in the
+site-claim, so `SET_HOSTNAME` names the box from NetBox instead of `Switch`.
