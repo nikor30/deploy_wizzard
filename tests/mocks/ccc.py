@@ -101,6 +101,10 @@ def create_ccc_app() -> FastAPI:
         serial = device["deviceInfo"]["serialNumber"]
         STATE.provision_polls[serial] = STATE.claim_polls
         device["deviceInfo"]["state"] = "Planned"
+        # CCC applies the claim's device name to the PnP/inventory record, which
+        # the onboarding template's SET_HOSTNAME then pushes to the box.
+        if payload.get("hostname"):
+            device["deviceInfo"]["hostname"] = payload["hostname"]
         return {"response": "Claimed", "version": "1.0"}
 
     @app.get("/dna/intent/api/v1/template-programmer/template")

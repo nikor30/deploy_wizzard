@@ -255,13 +255,20 @@ def build_claim_payload(
             if key:  # gateway/prefix are omitted in the legacy fallback
                 parameters.append({"key": key, "value": value})
 
-    return {
+    payload: dict[str, Any] = {
         "deviceId": device.ccc_device_id,
         "siteId": device.ccc_site_id,
         "type": "Default",
         "imageInfo": {"imageId": image_id or "", "skip": image_id is None},
         "configInfo": {"configId": config_id, "configParameters": parameters},
     }
+    # Top-level device name for the PnP record ("Device Name" in the claim UI).
+    # Onboarding templates' SET_HOSTNAME reads this, not a config parameter — so
+    # without it CCC keeps the device's default hostname ("Switch"). Set it to
+    # the NetBox name so the box comes up correctly named.
+    if device.netbox_name:
+        payload["hostname"] = device.netbox_name
+    return payload
 
 
 def _webhook_payload(job_id: int, device: JobDevice) -> dict[str, Any]:
