@@ -643,3 +643,19 @@ Follow-up from live use of the 00_Webasto_OnBoarding preview:
 
 **Demo:** the Day-0 preview shows CAMPUSSWITCH as a no/yes dropdown, and the
 garbled password-derived variables no longer appear as open fields.
+
+## Day-0 fix: send mgmt subnet to CCC as a full dotted mask (v1.6.2) ✅
+
+Live claim failed with PnP error 1413 — CCC ran `ip address 172.20.10.249
+172.20.10.0/24`, IOS rejecting the CIDR in the mask position.
+
+- [x] CCC onboarding templates consume `mgmt_subnet` as the interface mask
+  (`ip address <ip> <mask>`); IOS requires dotted-decimal. Resolved `mgmt_subnet`
+  now carries a `claim_value` (255.255.255.0) alongside the CIDR display value
+- [x] `build_claim_payload` prefers `claim_value` on the wire; operator overrides
+  still win over it
+- [x] 170 pytest / 35 vitest / 4 e2e green
+
+**Demo:** for a device on 172.20.10.0/24, the preview shows MGMT_SUBNET as
+`172.20.10.0/24` but the claim sends `255.255.255.0`, so `ip address` applies
+cleanly.

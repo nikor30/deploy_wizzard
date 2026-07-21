@@ -171,7 +171,14 @@ def resolve_day0_variables(
         key = DAY0_ALIASES.get(norm)
         if key and key in builtins:
             source = SRC_MANUAL if key == "gateway" else SRC_NETBOX
-            result[variable] = {"value": builtins[key], "source": source}
+            info: dict[str, Any] = {"value": builtins[key], "source": source}
+            # CCC onboarding templates consume the mgmt subnet as the interface
+            # mask (`ip address <ip> <mask>`), and IOS rejects prefix/CIDR form
+            # ("Invalid input" — PnP error 1413). Present the CIDR to the
+            # operator but send the full dotted mask (255.255.255.0) to CCC.
+            if key == "mgmt_subnet" and "mgmt_mask" in builtins:
+                info["claim_value"] = builtins["mgmt_mask"]
+            result[variable] = info
             continue
         context_path = DAY0_CONTEXT_ALIASES.get(norm)
         value = resolve_path(context, context_path) if context_path else None
@@ -229,8 +236,12 @@ def build_claim_payload(
         for variable, info in device.day0_variables.items():
             if info.get("source") == SECRET:
                 value = secret_values.get(str(info.get("secret")), "")
+            elif variable in overrides:
+                value = overrides[variable]  # operator entry wins
             else:
-                value = overrides.get(variable, info.get("value") or "")
+                # claim_value is the wire form when it differs from the display
+                # value (e.g. mgmt subnet shown as CIDR, sent as a dotted mask).
+                value = info.get("claim_value") or info.get("value") or ""
             if value != "":
                 parameters.append({"key": variable, "value": str(value)})
     else:

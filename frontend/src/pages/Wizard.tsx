@@ -32,7 +32,7 @@ interface JobDevice {
   error: string | null
   day0_variables: Record<
     string,
-    { value: string | null; source: string; choices?: string[] }
+    { value: string | null; source: string; choices?: string[]; claim_value?: string }
   > | null
   dayn_variables: Record<
     string,

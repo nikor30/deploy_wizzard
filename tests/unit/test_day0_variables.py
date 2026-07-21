@@ -65,7 +65,12 @@ def test_resolve_webasto_template_only_leaves_aes_open() -> None:
         secret_names=["AES_ENCRYPTION_KEY", "PASSWORD_ENCRYPTION_KEY"],
     )
     assert resolved["MGMT_IP"] == {"value": "172.20.10.5", "source": "netbox"}
-    assert resolved["MGMT_SUBNET"] == {"value": "172.20.10.0/24", "source": "netbox"}
+    # subnet is shown as CIDR but sent to CCC as a full dotted mask
+    assert resolved["MGMT_SUBNET"] == {
+        "value": "172.20.10.0/24",
+        "source": "netbox",
+        "claim_value": "255.255.255.0",
+    }
     assert resolved["MGMT_VLAN"] == {"value": "900", "source": "netbox"}
     assert resolved["MGMT_VLAN_NAME"] == {"value": "MGMT", "source": "netbox"}
     assert resolved["SWITCHTYPE"] == {"value": "access", "source": "netbox"}
@@ -143,6 +148,31 @@ def test_junk_variables_omitted_from_claim_payload() -> None:
     keys = {p["key"] for p in payload["configInfo"]["configParameters"]}
     assert "pPYzdaRZdKO5gppL7ddKhk3iF" not in keys
     assert "HOSTNAME" in keys
+
+
+def test_mgmt_subnet_sent_to_ccc_as_dotted_mask() -> None:
+    """CCC applies mgmt_subnet as the interface mask (`ip address <ip> <mask>`);
+    IOS rejects CIDR form, so the wire value must be dotted-decimal even though
+    the operator sees the CIDR."""
+    device = _device()
+    resolved = resolve_day0_variables(["MGMT_SUBNET"], device, {"device": {}}, {})
+    assert resolved["MGMT_SUBNET"]["value"] == "172.20.10.0/24"  # shown to operator
+    assert resolved["MGMT_SUBNET"]["claim_value"] == "255.255.255.0"
+
+    device.day0_variables = resolved
+    payload = build_claim_payload(device, config_id="tpl-0", image_id=None)
+    params = {p["key"]: p["value"] for p in payload["configInfo"]["configParameters"]}
+    assert params["MGMT_SUBNET"] == "255.255.255.0"  # full mask on the wire
+
+
+def test_mgmt_subnet_override_still_wins_over_claim_value() -> None:
+    device = _device()
+    device.day0_variables = resolve_day0_variables(["MGMT_SUBNET"], device, {"device": {}}, {})
+    payload = build_claim_payload(
+        device, config_id="tpl-0", image_id=None, overrides={"MGMT_SUBNET": "255.255.252.0"}
+    )
+    params = {p["key"]: p["value"] for p in payload["configInfo"]["configParameters"]}
+    assert params["MGMT_SUBNET"] == "255.255.252.0"
 
 
 def test_claim_payload_decrypts_global_secret_values() -> None:
