@@ -624,3 +624,22 @@ stays open, and make that a global variable set once.
 MGMT_VLAN_NAME/SWITCHTYPE/CAMPUSSWITCH all prefill from NetBox, DEFAULT_GATEWAY
 is the editable .1 guess, and AES_ENCRYPTION_KEY fills from a global variable —
 nothing left open.
+
+## Day-0 variable fixes: campusswitch picker + hide CCC password-leak junk (v1.6.1) ✅
+
+Follow-up from live use of the 00_Webasto_OnBoarding preview:
+
+- [x] `switchType` keeps using the NetBox role (`device.role.name`) — confirmed
+  correct, unchanged
+- [x] `campusswitch` is an operator **yes/no picker** (default `no`), not the
+  NetBox role — removed from `DAY0_CONTEXT_ALIASES`, added `DAY0_CHOICE_VARS`;
+  resolved fields carry a `choices` list and render as a `<select>` in the wizard
+- [x] Catalyst Center leaks random secret tokens into a template's parameter list
+  (e.g. `pPYzdaRZdKO5gppL7ddKhk3iF`, `OaMGKyQBNwDjxFcagpT`). `_looks_like_junk_var`
+  detects these opaque mixed-case tokens (no separators, ≥16 chars, digits or many
+  case flips) and drops them entirely — never shown in the preview, never sent in
+  the claim
+- [x] 170 pytest / 36 vitest / 4 e2e green
+
+**Demo:** the Day-0 preview shows CAMPUSSWITCH as a no/yes dropdown, and the
+garbled password-derived variables no longer appear as open fields.

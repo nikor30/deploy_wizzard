@@ -69,7 +69,12 @@ def test_resolve_webasto_template_only_leaves_aes_open() -> None:
     assert resolved["MGMT_VLAN"] == {"value": "900", "source": "netbox"}
     assert resolved["MGMT_VLAN_NAME"] == {"value": "MGMT", "source": "netbox"}
     assert resolved["SWITCHTYPE"] == {"value": "access", "source": "netbox"}
-    assert resolved["CAMPUSSWITCH"] == {"value": "access", "source": "netbox"}
+    # campusswitch is an operator yes/no decision, not the NetBox role
+    assert resolved["CAMPUSSWITCH"] == {
+        "value": "no",
+        "source": "manual",
+        "choices": ["no", "yes"],
+    }
     # gateway is a guess, editable
     assert resolved["DEFAULT_GATEWAY"] == {"value": "172.20.10.1", "source": "manual"}
     # the AES/password keys come from the global variables (set once), masked
@@ -79,8 +84,65 @@ def test_resolve_webasto_template_only_leaves_aes_open() -> None:
         "secret": "AES_ENCRYPTION_KEY",
     }
     assert resolved["PASSWORD_ENCRYPTION_KEY"]["source"] == "secret"
-    # nothing left as open manual entry
-    assert not [v for v in resolved.values() if v["source"] == "manual" and v["value"] == ""]
+    # nothing left as open free-text entry (campusswitch is a picker with a default)
+    assert not [
+        v
+        for v in resolved.values()
+        if v["source"] == "manual" and v["value"] == "" and "choices" not in v
+    ]
+
+
+def test_switchtype_uses_netbox_role() -> None:
+    device = _device()
+    context = {"device": {"role": {"name": "access"}}}
+    resolved = resolve_day0_variables(["SWITCHTYPE"], device, context, {})
+    assert resolved["SWITCHTYPE"] == {"value": "access", "source": "netbox"}
+
+
+def test_campusswitch_is_yes_no_picker_not_role() -> None:
+    device = _device()
+    context = {"device": {"role": {"name": "access"}}}
+    resolved = resolve_day0_variables(["CAMPUSSWITCH"], device, context, {})
+    assert resolved["CAMPUSSWITCH"] == {
+        "value": "no",
+        "source": "manual",
+        "choices": ["no", "yes"],
+    }
+
+
+def test_garbled_password_leak_variables_are_hidden() -> None:
+    """CCC leaks random secret tokens into the template's parameter list; they
+    must never be shown to the operator nor sent in the claim."""
+    variables = [
+        "HOSTNAME",
+        "pPYzdaRZdKO5gppL7ddKhk3iF",
+        "OaMGKyQBNwDjxFcagpT",
+    ]
+    resolved = resolve_day0_variables(variables, _device(), {"device": {}}, {})
+    assert set(resolved) == {"HOSTNAME"}
+
+
+def test_normal_variable_names_are_not_treated_as_junk() -> None:
+    variables = [
+        "HOSTNAME",
+        "MGMT_IP",
+        "AES_ENCRYPTION_KEY",
+        "SwitchType",
+        "SNMP_LOCATION",
+    ]
+    resolved = resolve_day0_variables(variables, _device(), {"device": {}}, {})
+    assert set(resolved) == set(variables)
+
+
+def test_junk_variables_omitted_from_claim_payload() -> None:
+    device = _device()
+    device.day0_variables = resolve_day0_variables(
+        ["HOSTNAME", "pPYzdaRZdKO5gppL7ddKhk3iF"], device, {"device": {}}, {}
+    )
+    payload = build_claim_payload(device, config_id="tpl-0", image_id=None)
+    keys = {p["key"] for p in payload["configInfo"]["configParameters"]}
+    assert "pPYzdaRZdKO5gppL7ddKhk3iF" not in keys
+    assert "HOSTNAME" in keys
 
 
 def test_claim_payload_decrypts_global_secret_values() -> None:
