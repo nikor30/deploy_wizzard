@@ -867,3 +867,20 @@ template was changed to plain variables `$device_name` / `$device_ip`.
 
 **Demo:** the banner prints `Hostname ... ssto145cis` and
 `Mgmt IP ... 172.20.10.145` instead of the raw variable names.
+
+## Day-N: explain interactive-prompt push failures (v1.10.5) ✅
+
+`NCTP10214 … Unable to push the invalid CLI` is CCC refusing a push because the
+switch asked a question it cannot auto-answer. The template is authored in CCC,
+so the fix is template-side — but the raw error gave the operator nothing.
+
+- [x] `interactive_prompt_hint()` recognises the signature (`Invalid CLI` plus
+  `(Interactive)` / `Do you wish to continue`) and appends the documented
+  `#INTERACTIVE … <IQ> … <R> … #ENDS_INTERACTIVE` remedy; other CLI rejections
+  are left untouched
+- [x] 219 pytest / 38 vitest / 4 e2e green
+
+**Root cause (device-side, not the tool):** `class-map type control subscriber`
+on a switch still in legacy auth mode triggers the irreversible legacy→new-style
+C3PL conversion, which prompts `Do you wish to continue? [yes]:`. CCC only
+answers `[y/n]`, `[confirm]` and `ACCEPT?`.

@@ -375,3 +375,21 @@ def test_deployment_failure_surfaces_the_device_level_reason(client: TestClient)
     job = client.get(f"/api/wizard/jobs/{job_id}").json()
     assert all(d["state"] == "dayn_failed" for d in job["devices"])
     assert "Invalid input detected at Vlan900" in job["devices"][0]["error"]
+
+
+def test_interactive_prompt_failure_gets_an_actionable_hint() -> None:
+    """CCC only auto-answers the prompts it knows; a bare "Do you wish to
+    continue? [yes]:" makes it reject the whole push as invalid CLI."""
+    from app.services.dayn import interactive_prompt_hint
+
+    reason = (
+        "Unable to push the invalid CLI to the device 172.20.10.145 using protocol ssh2. "
+        "Invalid CLI - Current output : class-map type control subscriber match-all "
+        "AAA_SVR_DOWN_AUTHD_HOST ... Do you wish to continue? [yes]: ... [confirm] (Interactive)"
+    )
+    hint = interactive_prompt_hint(reason)
+    assert "#INTERACTIVE" in hint
+    assert "<IQ>" in hint and "<R>" in hint
+    # an ordinary CLI rejection gets no interactive hint
+    assert interactive_prompt_hint("Invalid CLI - Current output : bogus command") == ""
+    assert interactive_prompt_hint("Device unreachable") == ""

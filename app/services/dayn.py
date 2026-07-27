@@ -534,6 +534,35 @@ def _deploy_handle(response: dict[str, Any]) -> tuple[str, str]:
     return "", ""
 
 
+INTERACTIVE_HINT = (
+    " — the switch asked an interactive question and Catalyst Center could not answer it, so it "
+    "rejected the whole push as 'invalid CLI'. This is template-side: wrap the offending command "
+    "in the Catalyst Center template with the interactive syntax, e.g.\n"
+    "#INTERACTIVE\n"
+    "authentication display new-style<IQ>Do you wish to continue? [yes]:<R>yes\n"
+    "#ENDS_INTERACTIVE\n"
+    "Entering a `class-map type control subscriber` (C3PL) command on a switch still in legacy "
+    "authentication mode triggers exactly this prompt, so converting the device first also fixes "
+    "it. See the Catalyst Center user guide, 'Create Templates to Automate Device Configuration "
+    "Changes'."
+)
+
+
+def interactive_prompt_hint(reason: str) -> str:
+    """Actionable hint when CCC rejected a push because the device prompted.
+
+    CCC only auto-answers the prompts it knows ([y/n], [confirm], ACCEPT?); a
+    plain `Do you wish to continue? [yes]:` is not one of them, and the failure
+    text alone gives the operator nothing to act on.
+    """
+    lowered = reason.lower()
+    if "invalid cli" not in lowered:
+        return ""
+    if "(interactive)" in lowered or "do you wish to continue" in lowered:
+        return INTERACTIVE_HINT
+    return ""
+
+
 async def poll_deployment(
     client: CatalystCenterClient,
     deployment_id: str,
@@ -558,6 +587,7 @@ async def poll_deployment(
             )
             raise PnPBridgeError(
                 f"Catalyst Center template deployment failed: {reason or 'no reason given'}"
+                f"{interactive_prompt_hint(reason)}"
             )
         if status in DEPLOYMENT_SUCCEEDED:
             return
