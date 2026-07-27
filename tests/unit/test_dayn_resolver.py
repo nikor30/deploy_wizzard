@@ -176,3 +176,17 @@ def test_unset_conventions_fall_back_to_manual() -> None:
     """A distribution switch has no default PO id — it stays an open field."""
     resolved = resolve_variables(["PO_ID"], {}, {"device": STO_DEVICE})
     assert resolved["PO_ID"]["source"] == "manual"
+
+
+def test_ambiguous_vlan_is_offered_as_an_editable_suggestion() -> None:
+    """Two site VLANs match "access": prefill the lowest VID but keep the field
+    editable, so a wrong guess is never pushed as a read-only value."""
+    device = {**STO_DEVICE, "access_vlan": None, "access_vlan_suggested": "200"}
+    resolved = resolve_variables(["ACCESS_VLAN"], {}, {"device": device})
+    assert resolved["ACCESS_VLAN"] == {"value": "200", "source": "manual"}
+
+
+def test_unique_vlan_match_is_read_only_netbox() -> None:
+    device = {**STO_DEVICE, "access_vlan": "200", "access_vlan_suggested": None}
+    resolved = resolve_variables(["ACCESS_VLAN"], {}, {"device": device})
+    assert resolved["ACCESS_VLAN"] == {"value": "200", "source": "netbox"}

@@ -23,7 +23,12 @@ from app.services.dayn import (
     resolve_variables,
     run_dayn,
 )
-from app.services.matching import MATCHED, SiteMappingLookup, match_serials
+from app.services.matching import (
+    MATCHED,
+    SiteMappingLookup,
+    match_serials,
+    preselect_mgmt_vlan,
+)
 from app.services.settings_store import (
     filter_templates,
     get_secret_box,
@@ -259,6 +264,10 @@ async def match_job(job_id: int, db: DbSession) -> JobOut:
             option.get("vid") == device.mgmt_vlan for option in result.vlan_options
         ):
             device.mgmt_vlan = None
+        if device.mgmt_vlan is None:
+            # preselect the site's management VLAN by name so the operator only
+            # confirms it; an ambiguous name leaves the dropdown unset
+            device.mgmt_vlan = preselect_mgmt_vlan(result.vlan_options)
     job.current_step = 2
     db.flush()
     return _job_out(job)

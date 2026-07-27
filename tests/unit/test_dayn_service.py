@@ -297,3 +297,81 @@ def test_composite_template_deploys_each_member_not_the_container(client: TestCl
     for body in bodies:
         keys = set(body["targetInfo"][0]["params"])
         assert keys == ({"CONTACT"} if body["templateId"] == "banner" else {"SNMP_LOCATION"})
+
+
+# --- deploy tracking: deployment id vs task id -------------------------------
+
+DEPLOY_SENTENCE = (
+    "Deployment of Template: cffd63b1-2e02-45b9-812e-2147176ea3be."
+    "ApplicableTargets: [172.20.10.145]"
+    "Template Deploymemnt Id: cf46d06a-a007-4275-b73b-519953693f29"
+)
+
+
+def test_deploy_handle_extracts_the_uuid_from_ccc_deployment_sentence() -> None:
+    """deploy/v2 answers with a sentence, not an id. Polling it as a task gives
+    HTTP 400 ("172.20.10 is not a valid UUID")."""
+    from app.services.dayn import _deploy_handle
+
+    assert _deploy_handle({"deploymentId": DEPLOY_SENTENCE}) == (
+        "deployment",
+        "cf46d06a-a007-4275-b73b-519953693f29",
+    )
+    # a genuine taskId is still tracked as a task
+    assert _deploy_handle({"response": {"taskId": "task-1"}}) == ("task", "task-1")
+    assert _deploy_handle({}) == ("", "")
+
+
+def test_deploy_polls_the_deployment_status_endpoint(client: TestClient) -> None:
+    job_id = _run_day0(client)
+    _store_dayn_mapping(client)
+    _prepare(client, job_id)
+    status_url = (
+        f"{CCC}/dna/intent/api/v1/template-programmer/template/deploy/status/"
+        "cf46d06a-a007-4275-b73b-519953693f29"
+    )
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="testserver").pass_through()
+        _mock_ccc(respx_mock)
+        _mock_template(respx_mock)
+        respx_mock.post(DEPLOY_URL).respond(200, json={"deploymentId": DEPLOY_SENTENCE})
+        status = respx_mock.get(status_url).respond(200, json={"status": "SUCCESS"})
+        respx_mock.patch(f"{NETBOX}/api/dcim/devices/1/").respond(200, json={"id": 1})
+        respx_mock.patch(f"{NETBOX}/api/dcim/devices/2/").respond(200, json={"id": 2})
+        _deploy(client, job_id, respx_mock)
+
+    assert status.called
+    job = client.get(f"/api/wizard/jobs/{job_id}").json()
+    assert all(d["state"] == "completed" for d in job["devices"])
+
+
+def test_deployment_failure_surfaces_the_device_level_reason(client: TestClient) -> None:
+    job_id = _run_day0(client)
+    _store_dayn_mapping(client)
+    _prepare(client, job_id)
+    status_url = (
+        f"{CCC}/dna/intent/api/v1/template-programmer/template/deploy/status/"
+        "cf46d06a-a007-4275-b73b-519953693f29"
+    )
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="testserver").pass_through()
+        _mock_ccc(respx_mock)
+        _mock_template(respx_mock)
+        respx_mock.post(DEPLOY_URL).respond(200, json={"deploymentId": DEPLOY_SENTENCE})
+        respx_mock.get(status_url).respond(
+            200,
+            json={
+                "status": "FAILURE",
+                "devices": [
+                    {
+                        "status": "FAILURE",
+                        "detailedStatusMessage": "Invalid input detected at Vlan900",
+                    }
+                ],
+            },
+        )
+        _deploy(client, job_id, respx_mock)
+
+    job = client.get(f"/api/wizard/jobs/{job_id}").json()
+    assert all(d["state"] == "dayn_failed" for d in job["devices"])
+    assert "Invalid input detected at Vlan900" in job["devices"][0]["error"]

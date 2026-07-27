@@ -114,3 +114,25 @@ async def test_missing_mgmt_ip_still_matches_with_none() -> None:
         (result,) = await match_serials(["FCW1234ABCD"], client, MAPPING)
     assert result.match_status == "matched"
     assert result.mgmt_ip is None
+
+
+# --- management VLAN preselection -------------------------------------------
+
+
+def test_preselects_the_site_management_vlan_by_name() -> None:
+    from app.services.matching import preselect_mgmt_vlan
+
+    vlans = [{"vid": 200, "name": "Data"}, {"vid": 900, "name": "MGMT"}]
+    assert preselect_mgmt_vlan(vlans) == 900
+    # spelled-out variant
+    assert preselect_mgmt_vlan([{"vid": 901, "name": "Management"}]) == 901
+
+
+def test_mgmt_vlan_preselect_skips_ambiguous_or_absent_names() -> None:
+    from app.services.matching import preselect_mgmt_vlan
+
+    # picking the wrong management VLAN strands the device -> operator decides
+    ambiguous = [{"vid": 900, "name": "MGMT-A"}, {"vid": 901, "name": "MGMT-B"}]
+    assert preselect_mgmt_vlan(ambiguous) is None
+    assert preselect_mgmt_vlan([{"vid": 200, "name": "Data"}]) is None
+    assert preselect_mgmt_vlan([]) is None

@@ -407,3 +407,17 @@ def test_ambiguous_vlan_name_stays_unset() -> None:
     vlans = [{"vid": 200, "name": "Access-Data"}, {"vid": 201, "name": "Access-Voice"}]
     ctx = build_device_context(ACCESS_DEVICE, CABLED, vlans, [])
     assert ctx["device"]["access_vlan"] is None
+
+
+def test_ambiguous_vlan_keyword_yields_a_suggestion_not_a_value() -> None:
+    vlans = [
+        {"vid": 201, "name": "Access-Voice"},
+        {"vid": 200, "name": "Access-Data"},
+        {"vid": 999, "name": "CRITICAL_AUTH"},
+    ]
+    ctx = build_device_context(ACCESS_DEVICE, CABLED, vlans, [])["device"]
+    assert ctx["access_vlan"] is None
+    assert ctx["access_vlan_suggested"] == "200"  # lowest VID of the matches
+    # the unique critical match stays a confident value
+    assert ctx["critical_vlan"] == "999"
+    assert ctx["critical_vlan_suggested"] is None
