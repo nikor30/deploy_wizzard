@@ -26,6 +26,27 @@ def pnp_states(db: Session) -> list[str]:
     return selected or list(PNP_ACTIONABLE_STATES)
 
 
+def template_filter(db: Session, step: str) -> list[str]:
+    """Words that a template's name must contain to be offered in `step`
+    ("day0" | "dayn"). Empty list = no filtering (offer everything)."""
+    row = db.get(AppSetting, f"{step}_template_filter")
+    if row is None or not row.value:
+        return []
+    return [word.strip() for word in row.value.split(",") if word.strip()]
+
+
+def filter_templates(templates: list[str], words: list[str]) -> list[str]:
+    """Names containing any of `words` (case-insensitive substring match).
+
+    An empty filter keeps everything — the setting is opt-in, so a blank value
+    must never hide the templates an operator needs.
+    """
+    if not words:
+        return templates
+    lowered = [word.lower() for word in words]
+    return [name for name in templates if any(word in name.lower() for word in lowered)]
+
+
 def get_secret_box() -> SecretBox:
     return SecretBox(get_settings().require_secret_key())
 

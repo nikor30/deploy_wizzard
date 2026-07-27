@@ -43,6 +43,23 @@ PNP_SELECTABLE_STATES: tuple[str, ...] = (
 )
 
 
+def _template_params(template: dict[str, Any]) -> list[str]:
+    """Variable names from a template payload, de-duplicated in order.
+
+    `templateParams` is the CCC 2.3.7 shape; older/other payloads spell it
+    `params`, so both are accepted rather than silently returning nothing.
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+    for key in ("templateParams", "params"):
+        for param in template.get(key) or []:
+            name = param.get("parameterName") or param.get("paramName")
+            if name and str(name) not in seen:
+                seen.add(str(name))
+                names.append(str(name))
+    return names
+
+
 class CatalystCenterClient:
     def __init__(
         self,
@@ -240,6 +257,32 @@ class CatalystCenterClient:
         """Single template incl. variable definitions (templateParams)."""
         response = await self._get(f"/dna/intent/api/v1/template-programmer/template/{template_id}")
         return dict(response.json())
+
+    async def get_template_variables(self, template_id: str) -> list[str]:
+        """Variable names a template needs, including a composite's members.
+
+        A CCC *composite* template holds no `templateParams` of its own — its
+        variables live in the member templates listed under `containingTemplates`
+        (the member entries are stubs, so each is fetched by id). Resolving only
+        the top level therefore yields an empty set and every member variable
+        silently goes unfilled. Members are fetched once each and their
+        variables unioned in declaration order (first occurrence wins), so a
+        variable shared by two members is asked for once.
+        """
+        template = await self.get_template(template_id)
+        variables = _template_params(template)
+        seen = set(variables)
+        for member in template.get("containingTemplates") or []:
+            member_id = member.get("id") or member.get("templateId")
+            # a member stub may already carry its params; only fetch when it doesn't
+            member_vars = _template_params(member)
+            if not member_vars and member_id:
+                member_vars = _template_params(await self.get_template(str(member_id)))
+            for name in member_vars:
+                if name not in seen:
+                    seen.add(name)
+                    variables.append(name)
+        return variables
 
     async def deploy_template(self, payload: dict[str, Any]) -> dict[str, Any]:
         """POST deploy/v2 (§6.1); returns a task. Not retried (not idempotent)."""

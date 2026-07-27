@@ -21,7 +21,7 @@ from app.errors import PnPBridgeError
 from app.services import settings_store
 from app.services.connections import get_catalyst_client, get_netbox_client
 from app.services.dayn import load_device_context, resolve_variables
-from app.services.settings_store import pnp_states
+from app.services.settings_store import pnp_states, template_filter
 from app.services.suggest import suggest_variable_mappings
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -208,12 +208,7 @@ async def suggest_dayn_mappings(payload: DayNSuggestRequest, db: DbSession) -> l
     review material for the Day-N settings page — nothing is saved here.
     """
     async with get_catalyst_client(db) as catalyst:
-        template = await catalyst.get_template(payload.template_id)
-    variables = [
-        str(p.get("parameterName"))
-        for p in template.get("templateParams", [])
-        if p.get("parameterName")
-    ]
+        variables = await catalyst.get_template_variables(payload.template_id)
     if not variables:
         return []
 
@@ -292,12 +287,7 @@ async def preview_dayn_for_serial(payload: DayNPreviewRequest, db: DbSession) ->
     mappings = {m.variable: m.source_path for m in db.scalars(select(DayNMapping)).all()}
     if payload.template_id:
         async with get_catalyst_client(db) as catalyst:
-            template = await catalyst.get_template(payload.template_id)
-        variables = [
-            str(p.get("parameterName"))
-            for p in template.get("templateParams", [])
-            if p.get("parameterName")
-        ]
+            variables = await catalyst.get_template_variables(payload.template_id)
     else:
         variables = sorted(mappings)
 
@@ -377,6 +367,10 @@ class AppFlags(BaseModel):
     # PnP workflow states listed in wizard step 1. Defaults to the actionable
     # set; operators can widen it (e.g. add Provisioned) for troubleshooting.
     pnp_states: list[str] = list(PNP_ACTIONABLE_STATES)
+    # Words a template's name must contain to be offered in that wizard step.
+    # Empty = offer every template (the filters are opt-in).
+    day0_template_filter: list[str] = []
+    dayn_template_filter: list[str] = []
 
     @field_validator("pnp_states")
     @classmethod
@@ -388,6 +382,15 @@ class AppFlags(BaseModel):
             raise ValueError("Select at least one PnP device state.")
         # keep the canonical order so Unclaimed sorts first in the device list
         return [state for state in PNP_SELECTABLE_STATES if state in value]
+
+    @field_validator("day0_template_filter", "dayn_template_filter")
+    @classmethod
+    def _clean_filter(cls, value: list[str]) -> list[str]:
+        # commas separate the words in storage, so they cannot appear in one
+        words = [word.strip() for word in value]
+        if any("," in word for word in words):
+            raise ValueError("Filter words cannot contain commas.")
+        return [word for word in words if word]
 
 
 def _flag(db: Session, key: str) -> bool:
@@ -405,13 +408,20 @@ def _set_setting(db: Session, key: str, value: str) -> None:
 
 @router.get("/flags")
 def get_flags(db: DbSession) -> AppFlags:
-    return AppFlags(debug=_flag(db, "debug"), pnp_states=pnp_states(db))
+    return AppFlags(
+        debug=_flag(db, "debug"),
+        pnp_states=pnp_states(db),
+        day0_template_filter=template_filter(db, "day0"),
+        dayn_template_filter=template_filter(db, "dayn"),
+    )
 
 
 @router.put("/flags")
 def put_flags(payload: AppFlags, db: DbSession) -> AppFlags:
     _set_setting(db, "debug", "true" if payload.debug else "false")
     _set_setting(db, "pnp_states", ",".join(payload.pnp_states))
+    _set_setting(db, "day0_template_filter", ",".join(payload.day0_template_filter))
+    _set_setting(db, "dayn_template_filter", ",".join(payload.dayn_template_filter))
     db.flush()
     logger.info(
         "Set app flags: debug=%s pnp_states=%s", payload.debug, ",".join(payload.pnp_states)

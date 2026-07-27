@@ -218,3 +218,80 @@ async def test_site_list_keeps_one_based_offset() -> None:
     async with CatalystCenterClient(BASE, "admin", "pw") as client:
         await client.get_sites()
     assert site_route.calls[0].request.url.params["offset"] == "1"
+
+
+TEMPLATE_URL = f"{BASE}/dna/intent/api/v1/template-programmer/template"
+
+
+@respx.mock
+async def test_template_variables_plain_template() -> None:
+    respx.post(TOKEN_URL).respond(200, json={"Token": "tok"})
+    respx.get(f"{TEMPLATE_URL}/tpl-1").respond(
+        200,
+        json={
+            "id": "tpl-1",
+            "templateParams": [{"parameterName": "HOSTNAME"}, {"parameterName": "MGMT_IP"}],
+        },
+    )
+    async with CatalystCenterClient(BASE, "admin", "pw") as client:
+        assert await client.get_template_variables("tpl-1") == ["HOSTNAME", "MGMT_IP"]
+
+
+@respx.mock
+async def test_template_variables_composite_unions_member_templates() -> None:
+    """A composite template carries no templateParams of its own — its variables
+    live in the member templates under containingTemplates."""
+    respx.post(TOKEN_URL).respond(200, json={"Token": "tok"})
+    respx.get(f"{TEMPLATE_URL}/comp-1").respond(
+        200,
+        json={
+            "id": "comp-1",
+            "composite": True,
+            "templateParams": [],
+            "containingTemplates": [{"id": "m-1"}, {"id": "m-2"}],
+        },
+    )
+    respx.get(f"{TEMPLATE_URL}/m-1").respond(
+        200,
+        json={"id": "m-1", "templateParams": [{"parameterName": "HOSTNAME"}]},
+    )
+    respx.get(f"{TEMPLATE_URL}/m-2").respond(
+        200,
+        json={
+            "id": "m-2",
+            "templateParams": [{"parameterName": "MGMT_IP"}, {"parameterName": "HOSTNAME"}],
+        },
+    )
+    async with CatalystCenterClient(BASE, "admin", "pw") as client:
+        variables = await client.get_template_variables("comp-1")
+    # union in declaration order, shared variable asked for once
+    assert variables == ["HOSTNAME", "MGMT_IP"]
+
+
+@respx.mock
+async def test_template_variables_uses_inline_member_params_without_extra_fetch() -> None:
+    respx.post(TOKEN_URL).respond(200, json={"Token": "tok"})
+    respx.get(f"{TEMPLATE_URL}/comp-2").respond(
+        200,
+        json={
+            "id": "comp-2",
+            "composite": True,
+            "containingTemplates": [
+                {"id": "m-9", "templateParams": [{"parameterName": "VLAN_ID"}]}
+            ],
+        },
+    )
+    member = respx.get(f"{TEMPLATE_URL}/m-9").respond(200, json={"id": "m-9"})
+    async with CatalystCenterClient(BASE, "admin", "pw") as client:
+        assert await client.get_template_variables("comp-2") == ["VLAN_ID"]
+    assert not member.called  # inline params are enough
+
+
+@respx.mock
+async def test_template_variables_accepts_legacy_params_key() -> None:
+    respx.post(TOKEN_URL).respond(200, json={"Token": "tok"})
+    respx.get(f"{TEMPLATE_URL}/tpl-legacy").respond(
+        200, json={"id": "tpl-legacy", "params": [{"paramName": "SNMP_LOCATION"}]}
+    )
+    async with CatalystCenterClient(BASE, "admin", "pw") as client:
+        assert await client.get_template_variables("tpl-legacy") == ["SNMP_LOCATION"]

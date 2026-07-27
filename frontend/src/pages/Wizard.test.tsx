@@ -105,7 +105,8 @@ beforeEach(() => {
   fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
     if (url === '/api/wizard/jobs' && !init?.method) return Promise.resolve(jsonResponse([]))
     if (url === '/api/wizard/pnp-devices') return Promise.resolve(jsonResponse(pnpDevices))
-    if (url === '/api/wizard/day0/templates') return Promise.resolve(jsonResponse(templates))
+    if (url.startsWith('/api/wizard/day0/templates'))
+      return Promise.resolve(jsonResponse(templates))
     if (url === '/api/settings/flags') return Promise.resolve(jsonResponse({ debug: false }))
     if (url === '/api/wizard/jobs' && init?.method === 'POST')
       return Promise.resolve(jsonResponse({ ...matchedJob, devices: [] }))
@@ -222,7 +223,8 @@ describe('Wizard', () => {
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       if (url === '/api/wizard/jobs' && !init?.method)
         return Promise.resolve(jsonResponse([finishedJob]))
-      if (url === '/api/wizard/day0/templates') return Promise.resolve(jsonResponse(templates))
+      if (url.startsWith('/api/wizard/day0/templates'))
+        return Promise.resolve(jsonResponse(templates))
       return Promise.resolve(jsonResponse(finishedJob))
     })
     renderWizard()
@@ -254,7 +256,8 @@ describe('Wizard', () => {
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       if (url === '/api/wizard/jobs' && !init?.method)
         return Promise.resolve(jsonResponse([finishedJob]))
-      if (url === '/api/wizard/day0/templates') return Promise.resolve(jsonResponse(templates))
+      if (url.startsWith('/api/wizard/day0/templates'))
+        return Promise.resolve(jsonResponse(templates))
       if (url.endsWith('/dayn/prepare')) return Promise.resolve(jsonResponse(preparedJob))
       if (url.endsWith('/dayn/deploy'))
         return Promise.resolve(jsonResponse({ ...preparedJob, status: 'dayn_running' }))
@@ -296,7 +299,8 @@ describe('Wizard', () => {
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       if (url === '/api/wizard/jobs' && !init?.method)
         return Promise.resolve(jsonResponse([doneJob]))
-      if (url === '/api/wizard/day0/templates') return Promise.resolve(jsonResponse(templates))
+      if (url.startsWith('/api/wizard/day0/templates'))
+        return Promise.resolve(jsonResponse(templates))
       return Promise.resolve(jsonResponse(doneJob))
     })
     renderWizard()

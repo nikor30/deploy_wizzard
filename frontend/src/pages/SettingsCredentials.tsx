@@ -20,6 +20,21 @@ const PNP_STATES = [
   'Deleted',
 ] as const
 const DEFAULT_PNP_STATES: string[] = ['Unclaimed', 'Planned', 'Onboarding', 'Error']
+
+interface AppFlags {
+  debug: boolean
+  pnp_states?: string[]
+  day0_template_filter?: string[]
+  dayn_template_filter?: string[]
+}
+
+/** "onboard, webasto" -> ["onboard", "webasto"] (blanks dropped) */
+function toWords(text: string): string[] {
+  return text
+    .split(',')
+    .map((word) => word.trim())
+    .filter(Boolean)
+}
 const PNP_STATE_HINTS: Record<string, string> = {
   Unclaimed: 'New devices waiting to be claimed',
   Planned: 'Claimed, config not applied yet',
@@ -153,6 +168,9 @@ export default function SettingsCredentials() {
   const [busy, setBusy] = useState<string | null>(null)
   const [debug, setDebug] = useState(false)
   const [pnpStates, setPnpStates] = useState<string[]>(DEFAULT_PNP_STATES)
+  // kept as the raw comma-separated text so typing a comma isn't fought with
+  const [day0Filter, setDay0Filter] = useState('')
+  const [daynFilter, setDaynFilter] = useState('')
 
   useEffect(() => {
     getCredentials()
@@ -160,23 +178,31 @@ export default function SettingsCredentials() {
       .catch((err: Error) => setLoadError(err.message))
     fetch('/api/settings/flags')
       .then((r) => r.json())
-      .then((f: { debug: boolean; pnp_states?: string[] }) => {
+      .then((f: AppFlags) => {
         setDebug(f.debug)
         if (f.pnp_states?.length) setPnpStates(f.pnp_states)
+        setDay0Filter((f.day0_template_filter ?? []).join(', '))
+        setDaynFilter((f.dayn_template_filter ?? []).join(', '))
       })
       .catch(() => setDebug(false))
   }, [])
 
-  const putFlags = (next: { debug: boolean; pnp_states: string[] }) =>
+  const putFlags = (next: Partial<AppFlags>) =>
     fetch('/api/settings/flags', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(next),
+      body: JSON.stringify({
+        debug,
+        pnp_states: pnpStates,
+        day0_template_filter: toWords(day0Filter),
+        dayn_template_filter: toWords(daynFilter),
+        ...next,
+      }),
     })
 
   const toggleDebug = async (value: boolean) => {
     setDebug(value)
-    await putFlags({ debug: value, pnp_states: pnpStates }).catch(() => setDebug(!value))
+    await putFlags({ debug: value }).catch(() => setDebug(!value))
   }
 
   const togglePnpState = async (state: string, checked: boolean) => {
@@ -185,8 +211,16 @@ export default function SettingsCredentials() {
     const ordered = PNP_STATES.filter((s) => next.includes(s))
     const previous = pnpStates
     setPnpStates(ordered)
-    await putFlags({ debug, pnp_states: ordered }).catch(() => setPnpStates(previous))
+    await putFlags({ pnp_states: ordered }).catch(() => setPnpStates(previous))
   }
+
+  // saved on blur rather than per keystroke
+  const saveTemplateFilter = (step: 'day0' | 'dayn', text: string) =>
+    void putFlags(
+      step === 'day0'
+        ? { day0_template_filter: toWords(text) }
+        : { dayn_template_filter: toWords(text) },
+    )
 
   if (loadError) {
     return <StatusBanner result={{ ok: false, detail: `Cannot load settings: ${loadError}` }} />
@@ -382,6 +416,41 @@ export default function SettingsCredentials() {
                 </span>
               </label>
             ))}
+          </div>
+        </section>
+
+        <section className={cardClass} aria-label="Template filters">
+          <h2 className="text-lg font-semibold">Template filters</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Only offer templates whose name contains one of these words, so each wizard step lists
+            just the templates meant for it. Comma-separated, case-insensitive; leave empty to offer
+            every template.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="text-sm font-medium">Day-0 templates</span>
+              <input
+                type="text"
+                aria-label="Day-0 template filter"
+                placeholder="e.g. onboarding, day0"
+                className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
+                value={day0Filter}
+                onChange={(e) => setDay0Filter(e.target.value)}
+                onBlur={(e) => saveTemplateFilter('day0', e.target.value)}
+              />
+            </label>
+            <label className="block">
+              <span className="text-sm font-medium">Day-N templates</span>
+              <input
+                type="text"
+                aria-label="Day-N template filter"
+                placeholder="e.g. dayn, baseline"
+                className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
+                value={daynFilter}
+                onChange={(e) => setDaynFilter(e.target.value)}
+                onBlur={(e) => saveTemplateFilter('dayn', e.target.value)}
+              />
+            </label>
           </div>
         </section>
 

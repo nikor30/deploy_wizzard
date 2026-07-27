@@ -313,6 +313,49 @@ def test_day0_prepare_endpoint_previews_variables(client: TestClient) -> None:
     assert variables["SITE_CODE"] == {"value": "", "source": "manual"}
 
 
+def test_day0_prepare_resolves_composite_template_members(client: TestClient) -> None:
+    """A composite Day-0 template holds no templateParams itself — prepare must
+    follow containingTemplates or every member variable goes unfilled."""
+    _store_credentials(client)
+    job_id = _matched_job(client)
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="testserver").pass_through()
+        respx_mock.post(f"{CCC}/dna/system/api/v1/auth/token").respond(200, json={"Token": "t"})
+        tpl = f"{CCC}/dna/intent/api/v1/template-programmer/template"
+        respx_mock.get(f"{tpl}/comp-0").respond(
+            200,
+            json={
+                "id": "comp-0",
+                "composite": True,
+                "templateParams": [],
+                "containingTemplates": [{"id": "mem-a"}, {"id": "mem-b"}],
+            },
+        )
+        respx_mock.get(f"{tpl}/mem-a").respond(
+            200, json={"id": "mem-a", "templateParams": [{"parameterName": "HOSTNAME"}]}
+        )
+        respx_mock.get(f"{tpl}/mem-b").respond(
+            200, json={"id": "mem-b", "templateParams": [{"parameterName": "GATEWAY"}]}
+        )
+        respx_mock.get(f"{NETBOX}/api/dcim/devices/1001/").respond(
+            200, json={"id": 1001, "name": "sw-ffm-01", "site": {"id": 10}}
+        )
+        respx_mock.get(f"{NETBOX}/api/dcim/interfaces/").respond(
+            200, json={"results": [], "next": None}
+        )
+        respx_mock.get(f"{NETBOX}/api/ipam/vlans/").respond(200, json={"results": [], "next": None})
+        respx_mock.get(f"{NETBOX}/api/tenancy/contact-assignments/").respond(
+            200, json={"results": [], "next": None}
+        )
+        response = client.post(
+            f"/api/wizard/jobs/{job_id}/day0/prepare", json={"config_id": "comp-0"}
+        )
+    assert response.status_code == 200, response.text
+    variables = response.json()["devices"][0]["day0_variables"]
+    assert variables["HOSTNAME"] == {"value": "sw-ffm-01", "source": "netbox"}
+    assert variables["GATEWAY"] == {"value": "172.20.10.1", "source": "manual"}
+
+
 def test_debug_flag_roundtrip(client: TestClient) -> None:
     assert client.get("/api/settings/flags").json()["debug"] is False
     assert client.put("/api/settings/flags", json={"debug": True}).json()["debug"] is True

@@ -122,6 +122,40 @@ describe('SettingsCredentials', () => {
     ).toHaveLength(0)
   })
 
+  it('saves the Day-0/Day-N template filters on blur', async () => {
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        url === '/api/settings/flags'
+          ? jsonResponse({
+              debug: false,
+              pnp_states: ['Unclaimed'],
+              day0_template_filter: [],
+              dayn_template_filter: ['baseline'],
+            })
+          : jsonResponse(storedCredentials),
+      ),
+    )
+    render(<SettingsCredentials />)
+
+    // existing filter comes back as readable comma-separated text
+    expect(await screen.findByLabelText('Day-N template filter')).toHaveValue('baseline')
+
+    const day0 = screen.getByLabelText('Day-0 template filter')
+    await userEvent.type(day0, 'onboarding, webasto')
+    await userEvent.tab() // blur saves
+
+    await waitFor(() => {
+      const flagCalls = fetchMock.mock.calls.filter(
+        ([url, init]) => url === '/api/settings/flags' && (init as RequestInit)?.method === 'PUT',
+      )
+      const flagCall = flagCalls[flagCalls.length - 1]
+      expect(flagCall).toBeDefined()
+      const body = JSON.parse((flagCall![1] as RequestInit).body as string)
+      expect(body.day0_template_filter).toEqual(['onboarding', 'webasto'])
+      expect(body.dayn_template_filter).toEqual(['baseline']) // untouched filter preserved
+    })
+  })
+
   it('runs a connection test and shows the result', async () => {
     fetchMock.mockImplementation((url: string) =>
       Promise.resolve(
