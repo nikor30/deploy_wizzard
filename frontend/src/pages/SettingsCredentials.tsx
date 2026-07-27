@@ -10,6 +10,25 @@ import {
 
 type ServiceKey = 'catalyst' | 'netbox' | 'webhook'
 
+// Catalyst Center PnP workflow states, in the order the device list sorts them.
+const PNP_STATES = [
+  'Unclaimed',
+  'Planned',
+  'Onboarding',
+  'Error',
+  'Provisioned',
+  'Deleted',
+] as const
+const DEFAULT_PNP_STATES: string[] = ['Unclaimed', 'Planned', 'Onboarding', 'Error']
+const PNP_STATE_HINTS: Record<string, string> = {
+  Unclaimed: 'New devices waiting to be claimed',
+  Planned: 'Claimed, config not applied yet',
+  Onboarding: 'Currently provisioning',
+  Error: 'Previous claim failed',
+  Provisioned: 'Already onboarded (troubleshooting)',
+  Deleted: 'Removed in Catalyst Center',
+}
+
 interface FormBlock {
   base_url: string
   username: string
@@ -133,6 +152,7 @@ export default function SettingsCredentials() {
   const [testResults, setTestResults] = useState<Partial<Record<ServiceKey, TestResult>>>({})
   const [busy, setBusy] = useState<string | null>(null)
   const [debug, setDebug] = useState(false)
+  const [pnpStates, setPnpStates] = useState<string[]>(DEFAULT_PNP_STATES)
 
   useEffect(() => {
     getCredentials()
@@ -140,17 +160,32 @@ export default function SettingsCredentials() {
       .catch((err: Error) => setLoadError(err.message))
     fetch('/api/settings/flags')
       .then((r) => r.json())
-      .then((f: { debug: boolean }) => setDebug(f.debug))
+      .then((f: { debug: boolean; pnp_states?: string[] }) => {
+        setDebug(f.debug)
+        if (f.pnp_states?.length) setPnpStates(f.pnp_states)
+      })
       .catch(() => setDebug(false))
   }, [])
 
-  const toggleDebug = async (value: boolean) => {
-    setDebug(value)
-    await fetch('/api/settings/flags', {
+  const putFlags = (next: { debug: boolean; pnp_states: string[] }) =>
+    fetch('/api/settings/flags', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ debug: value }),
-    }).catch(() => setDebug(!value))
+      body: JSON.stringify(next),
+    })
+
+  const toggleDebug = async (value: boolean) => {
+    setDebug(value)
+    await putFlags({ debug: value, pnp_states: pnpStates }).catch(() => setDebug(!value))
+  }
+
+  const togglePnpState = async (state: string, checked: boolean) => {
+    const next = checked ? [...pnpStates, state] : pnpStates.filter((s) => s !== state)
+    if (next.length === 0) return // at least one state must stay selected
+    const ordered = PNP_STATES.filter((s) => next.includes(s))
+    const previous = pnpStates
+    setPnpStates(ordered)
+    await putFlags({ debug, pnp_states: ordered }).catch(() => setPnpStates(previous))
   }
 
   if (loadError) {
@@ -318,6 +353,35 @@ export default function SettingsCredentials() {
               checked={form.webhook.enabled}
               onChange={(v) => update('webhook', { enabled: v })}
             />
+          </div>
+        </section>
+
+        <section className={cardClass} aria-label="PnP device states">
+          <h2 className="text-lg font-semibold">PnP device states</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Which Catalyst Center PnP states the wizard lists in step 1. Defaults to devices that
+            still need work; add <span className="font-mono">Provisioned</span> or{' '}
+            <span className="font-mono">Deleted</span> when troubleshooting. At least one state must
+            stay selected.
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {PNP_STATES.map((state) => (
+              <label key={state} className="flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-600"
+                  aria-label={`List ${state} devices`}
+                  checked={pnpStates.includes(state)}
+                  onChange={(e) => void togglePnpState(state, e.target.checked)}
+                />
+                <span>
+                  <span className="font-medium">{state}</span>
+                  <span className="block text-xs text-slate-500 dark:text-slate-400">
+                    {PNP_STATE_HINTS[state]}
+                  </span>
+                </span>
+              </label>
+            ))}
           </div>
         </section>
 

@@ -1,14 +1,29 @@
-"""Read/write encrypted service settings (catalyst, netbox, webhook)."""
+"""Read/write encrypted service settings (catalyst, netbox, webhook) and
+app-wide preferences stored in the key/value AppSetting table."""
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.clients.catalyst import PNP_ACTIONABLE_STATES, PNP_SELECTABLE_STATES
 from app.config import get_settings
 from app.crypto import SecretBox
-from app.db.models import ServiceSettings
+from app.db.models import AppSetting, ServiceSettings
 from app.errors import ConfigurationError
 
 SERVICES = ("catalyst", "netbox", "webhook")
+
+
+def pnp_states(db: Session) -> list[str]:
+    """PnP workflow states wizard step 1 lists (Settings → Credentials).
+
+    Falls back to the actionable default when unset or when the stored value
+    holds nothing recognizable, so a bad row can never blank the device list.
+    """
+    row = db.get(AppSetting, "pnp_states")
+    if row is None or not row.value:
+        return list(PNP_ACTIONABLE_STATES)
+    selected = [state for state in row.value.split(",") if state in PNP_SELECTABLE_STATES]
+    return selected or list(PNP_ACTIONABLE_STATES)
 
 
 def get_secret_box() -> SecretBox:

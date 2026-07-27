@@ -24,7 +24,7 @@ from app.services.dayn import (
     run_dayn,
 )
 from app.services.matching import MATCHED, SiteMappingLookup, match_serials
-from app.services.settings_store import get_secret_box
+from app.services.settings_store import get_secret_box, pnp_states
 
 router = APIRouter(prefix="/api/wizard", tags=["wizard"])
 logger = logging.getLogger(__name__)
@@ -155,10 +155,12 @@ async def list_pnp_devices(db: DbSession) -> list[PnpDevice]:
     Not just `Unclaimed`: devices that failed a previous claim (or were
     factory-reset after one) linger in CCC as Error/Planned/Onboarding, so
     they are listed here too — with their state shown — instead of silently
-    dropping out of the wizard while still visible in CCC's own GUI.
+    dropping out of the wizard while still visible in CCC's own GUI. Which
+    states are listed is configurable (Settings → Credentials).
     """
+    states = pnp_states(db)
     async with get_catalyst_client(db) as client:
-        devices = await client.get_pnp_devices()
+        devices = await client.get_pnp_devices(states)
     result: list[PnpDevice] = []
     for entry in devices:
         info = entry.get("deviceInfo") or {}
