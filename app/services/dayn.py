@@ -33,6 +33,11 @@ SECRET = "secret"
 SECRET_PREFIX = "secret."
 SECRET_MASK = "****"
 
+# Uplink port-channel description convention: UPL:<far-end switch name>.
+UPLINK_DESCRIPTION_PREFIX = "UPL:"
+# Access switches always use port-channel 1 for their uplink.
+PO_ID_ACCESS = "1"
+
 # Built-in Day-N variable → NetBox dot-path map, ported from the netbox_cc_dayn
 # project's mappings.yaml (the field choices are proven against the live
 # templates). Without these every Day-N variable had to be mapped by hand in
@@ -69,6 +74,17 @@ DAYN_ALIASES: dict[str, str] = {
     "UPLINKPORTS": "device.uplink_ports",
     "ARRVLANS": "device.site_vlans",
     "SITEVLANS": "device.site_vlans",
+    # uplink / VLAN conventions (see build_device_context)
+    "POID": "device.po_id",
+    "PORTCHANNELID": "device.po_id",
+    "PORTCHANNEL": "device.po_id",
+    "UPLINKDESCRIPTION": "device.uplink_description",
+    "UPLINKDESC": "device.uplink_description",
+    "UPLINKCONFIGURATIONINFORMATION": "device.uplink_description",
+    "ACCESSVLAN": "device.access_vlan",
+    "ACCESSVLANID": "device.access_vlan",
+    "CRITICALVLAN": "device.critical_vlan",
+    "CRITICALVLANID": "device.critical_vlan",
 }
 
 
@@ -152,6 +168,25 @@ def resolve_path(context: dict[str, Any], path: str) -> str | None:
     if isinstance(current, dict | list):
         return None
     return str(current)
+
+
+def _is_access_role(device: dict[str, Any]) -> bool:
+    role = (device.get("role") or device.get("device_role") or {}).get("name") or ""
+    return "access" in str(role).lower()
+
+
+def _vlan_by_name(site_vlans: list[dict[str, Any]] | None, keyword: str) -> str | None:
+    """VID of the site VLAN whose name contains `keyword` (case-insensitive).
+
+    Several matches are ambiguous — the operator picks — so only a single hit
+    resolves; the lowest VID wins nothing here, we simply stay manual.
+    """
+    hits = [
+        str(vlan["vid"])
+        for vlan in site_vlans or []
+        if vlan.get("vid") is not None and keyword in str(vlan.get("name") or "").lower()
+    ]
+    return hits[0] if len(hits) == 1 else None
 
 
 def _manual(variable: str) -> dict[str, Any]:
@@ -262,6 +297,16 @@ def build_device_context(
     ctx["site_vlans"] = ";".join(
         f"({v.get('vid')},{v.get('name', '')})" for v in (site_vlans or []) if v.get("vid")
     )
+    # Uplink port-channel description: always "UPL:<far-end switch>".
+    ctx["uplink_description"] = (
+        f"{UPLINK_DESCRIPTION_PREFIX}{ctx['uplink_switch']}" if ctx["uplink_switch"] else None
+    )
+    # Port-channel id: access switches always use 1 (their single uplink PO);
+    # any other role is a design decision and stays manual.
+    ctx["po_id"] = PO_ID_ACCESS if _is_access_role(device) else None
+    # VLANs picked out of the site's VLAN list by name.
+    ctx["access_vlan"] = _vlan_by_name(site_vlans, "access")
+    ctx["critical_vlan"] = _vlan_by_name(site_vlans, "critical")
     ctx["support_contact"] = _resolve_contact(device, contacts)
 
     address = (device.get("primary_ip4") or {}).get("address")

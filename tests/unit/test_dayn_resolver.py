@@ -146,3 +146,33 @@ def test_private_vlan_variables_are_optional() -> None:
 def test_other_manual_variables_stay_required() -> None:
     resolved = resolve_variables(["PO_ID", "NATIVE_VLAN_ID"], {}, {"device": STO_DEVICE})
     assert all("optional" not in info for info in resolved.values())
+
+
+def test_uplink_and_vlan_conventions_prefill_from_context() -> None:
+    """PO_ID/UPLINK description/access+critical VLAN come from the derived
+    context, so the IT-DayN template needs no manual entry for them."""
+    device = {
+        **STO_DEVICE,
+        "po_id": "1",
+        "uplink_description": "UPL:ssto199cis",
+        "access_vlan": "200",
+        "critical_vlan": "999",
+    }
+    resolved = resolve_variables(
+        ["PO_ID", "UPLINK CONFIGURATION INFORMATION", "ACCESS_VLAN", "CRITICAL_VLAN_ID"],
+        {},
+        {"device": device},
+    )
+    assert {name: info["value"] for name, info in resolved.items()} == {
+        "PO_ID": "1",
+        "UPLINK CONFIGURATION INFORMATION": "UPL:ssto199cis",
+        "ACCESS_VLAN": "200",
+        "CRITICAL_VLAN_ID": "999",
+    }
+    assert {info["source"] for info in resolved.values()} == {"netbox"}
+
+
+def test_unset_conventions_fall_back_to_manual() -> None:
+    """A distribution switch has no default PO id — it stays an open field."""
+    resolved = resolve_variables(["PO_ID"], {}, {"device": STO_DEVICE})
+    assert resolved["PO_ID"]["source"] == "manual"
