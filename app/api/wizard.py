@@ -476,7 +476,10 @@ def deploy_dayn(
             if info.get("source") == MANUAL:
                 value = manual_values.get(variable)
                 if value is None or value == "":
-                    missing.append(variable)
+                    # optional (private-VLAN) fields may stay blank: omit them
+                    # from the payload so the template's own default applies
+                    if not info.get("optional"):
+                        missing.append(variable)
                 else:
                     params[variable] = value
             elif info.get("source") == SECRET:
