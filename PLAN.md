@@ -853,3 +853,17 @@ CRITICAL_VLAN_ID 1010, all read-only from NetBox.
 is IOS answering the C3PL/new-style-AAA conversion prompt interactively
 (`Do you wish to continue? [yes]:`). CCC cannot answer prompts from a plain CLI
 template — that is template/device-side, and the tool now reports it verbatim.
+
+## Day-N: banner $device_name / $device_ip from NetBox (v1.10.4) ✅
+
+The banner's CCC binding variables (`$__device.hostname`) never rendered, so the
+template was changed to plain variables `$device_name` / `$device_ip`.
+
+- [x] `DEVICENAME` already mapped to `device.name`; added `DEVICEIP` →
+  `device.mgmt.ip` plus `MGMTIP`/`MANAGEMENTIP`/`DEVICEMANAGEMENTIP`, and
+  `MGMTMASK`/`MGMTPREFIX`/`MGMTSUBNET` off the same computed mgmt block
+- [x] Resolves from the NetBox primary IP; no primary IP ⇒ stays manual
+- [x] 218 pytest / 38 vitest / 4 e2e green
+
+**Demo:** the banner prints `Hostname ... ssto145cis` and
+`Mgmt IP ... 172.20.10.145` instead of the raw variable names.

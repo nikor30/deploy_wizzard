@@ -52,6 +52,13 @@ DAYN_ALIASES: dict[str, str] = {
     # identity / placement
     "HOSTNAME": "device.name",
     "DEVICENAME": "device.name",
+    "DEVICEIP": "device.mgmt.ip",
+    "MGMTIP": "device.mgmt.ip",
+    "MANAGEMENTIP": "device.mgmt.ip",
+    "DEVICEMANAGEMENTIP": "device.mgmt.ip",
+    "MGMTMASK": "device.mgmt.netmask",
+    "MGMTPREFIX": "device.mgmt.prefix_length",
+    "MGMTSUBNET": "device.mgmt.cidr",
     "SERIAL": "device.serial",
     "SERIALNUMBER": "device.serial",
     "ASSETID": "device.asset_tag",
