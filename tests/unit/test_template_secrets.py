@@ -137,6 +137,10 @@ def test_deploy_sends_plaintext_to_ccc_but_keeps_job_masked(client: TestClient) 
     with respx.mock(assert_all_called=False) as respx_mock:
         respx_mock.route(host="testserver").pass_through()
         respx_mock.post(f"{CCC}/dna/system/api/v1/auth/token").respond(200, json={"Token": "t"})
+        # the deploy resolves the template first (composite -> member templates)
+        respx_mock.get(f"{CCC}/dna/intent/api/v1/template-programmer/template/tpl-1").respond(
+            200, json={"id": "tpl-1", "templateParams": [{"parameterName": "RADIUS_KEY"}]}
+        )
         deploy_route = respx_mock.post(
             f"{CCC}/dna/intent/api/v1/template-programmer/template/deploy/v2"
         ).respond(200, json={"response": {"taskId": "task-1"}})

@@ -440,6 +440,23 @@ def _set_device(device_id: int, state: str, error: str | None = None) -> None:
                 device.dayn_finished_at = datetime.now(tz=UTC)
 
 
+def _task_id_of(response: dict[str, Any]) -> str:
+    """Task id from a deploy response.
+
+    CCC wraps it as `{"response": {"taskId": ...}}`, but some builds answer with
+    a bare `taskId`, or with `deploymentId`/`deploymentJobId` for template
+    deploys — all name the same task, so accept any of them.
+    """
+    inner = response.get("response")
+    inner = inner if isinstance(inner, dict) else {}
+    for source in (inner, response):
+        for key in ("taskId", "deploymentId", "deploymentJobId"):
+            value = source.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
 async def _deploy_one(
     client: CatalystCenterClient,
     netbox_settings: tuple[str, str, bool] | None,
@@ -457,7 +474,8 @@ async def _deploy_one(
         serial = device.serial
         netbox_device_id = device.netbox_device_id
         try:
-            payload = build_deploy_payload(template_id, device, params)
+            # validates the device is deployable (mgmt IP) before any API call
+            build_deploy_payload(template_id, device, params)
         except PnPBridgeError as exc:
             device.state = "dayn_failed"
             device.error = exc.message
@@ -465,13 +483,29 @@ async def _deploy_one(
 
     _set_device(device_id, "dayn_deploying")
     try:
-        response = await client.deploy_template(payload)
-        task_id = str(
-            (response.get("response") or {}).get("taskId") or response.get("taskId") or ""
-        )
-        if not task_id:
-            raise PnPBridgeError("deploy/v2 did not return a taskId.")
-        await poll_task(client, task_id, poll_interval=poll_interval, task_timeout=task_timeout)
+        # A composite template must be deployed member by member, in order —
+        # deploying the container itself pushes its member JSON to the device.
+        targets = await client.get_deployable_templates(template_id)
+        for member_id, member_variables in targets:
+            member_params = (
+                {k: v for k, v in params.items() if k in member_variables}
+                if member_variables
+                else params
+            )
+            with open_session() as db:
+                device = db.get(JobDevice, device_id)
+                if device is None:
+                    return
+                payload = build_deploy_payload(member_id, device, member_params)
+            response = await client.deploy_template(payload)
+            task_id = _task_id_of(response)
+            if not task_id:
+                raise PnPBridgeError(
+                    f"Catalyst Center accepted the deploy of template {member_id} but returned "
+                    "no taskId, so it cannot be tracked. Check the template in CCC "
+                    "(is it committed/versioned?) and the Logs page for the full response."
+                )
+            await poll_task(client, task_id, poll_interval=poll_interval, task_timeout=task_timeout)
     except PnPBridgeError as exc:
         logger.error("Day-N failed for device", extra={"job_id": job_id, "serial": serial})
         _set_device(device_id, "dayn_failed", error=exc.message)
