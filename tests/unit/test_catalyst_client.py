@@ -324,3 +324,51 @@ async def test_deploy_does_not_fall_back_on_a_payload_error() -> None:
         with pytest.raises(CatalystError, match="400"):
             await client.deploy_template({"templateId": "t-1", "targetInfo": []})
     assert not v1.called
+
+
+@respx.mock
+async def test_deployable_templates_plain_template_sends_all_params() -> None:
+    """A plain template deploys as itself with no param filtering."""
+    respx.post(TOKEN_URL).respond(200, json={"Token": "tok"})
+    respx.get(f"{TEMPLATE_URL}/tpl-1").respond(
+        200, json={"id": "tpl-1", "templateParams": [{"parameterName": "HOSTNAME"}]}
+    )
+    async with CatalystCenterClient(BASE, "admin", "pw") as client:
+        assert await client.get_deployable_templates("tpl-1") == [("tpl-1", [])]
+
+
+@respx.mock
+async def test_deployable_templates_composite_expands_to_members() -> None:
+    """Deploying the composite itself pushes its member JSON to the device as
+    CLI text, so it must expand to its members in declaration order."""
+    respx.post(TOKEN_URL).respond(200, json={"Token": "tok"})
+    respx.get(f"{TEMPLATE_URL}/comp-1").respond(
+        200,
+        json={
+            "id": "comp-1",
+            "composite": True,
+            "containingTemplates": [
+                {"id": "banner", "templateParams": [{"parameterName": "BANNER"}]},
+                {"id": "ports"},
+            ],
+        },
+    )
+    respx.get(f"{TEMPLATE_URL}/ports").respond(
+        200, json={"id": "ports", "templateParams": [{"parameterName": "PO_ID"}]}
+    )
+    async with CatalystCenterClient(BASE, "admin", "pw") as client:
+        assert await client.get_deployable_templates("comp-1") == [
+            ("banner", ["BANNER"]),
+            ("ports", ["PO_ID"]),
+        ]
+
+
+@respx.mock
+async def test_composite_without_usable_members_fails_loudly() -> None:
+    respx.post(TOKEN_URL).respond(200, json={"Token": "tok"})
+    respx.get(f"{TEMPLATE_URL}/comp-2").respond(
+        200, json={"id": "comp-2", "containingTemplates": [{"name": "no-id"}]}
+    )
+    async with CatalystCenterClient(BASE, "admin", "pw") as client:
+        with pytest.raises(CatalystError, match="no usable member templates"):
+            await client.get_deployable_templates("comp-2")

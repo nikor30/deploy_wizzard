@@ -787,3 +787,25 @@ IT-DayN fields that follow a fixed convention were still manual.
 **Demo:** for access switch ssto145cis cabled to ssto199cis, Day-N prefills
 PO_ID=1, UPLINK CONFIGURATION INFORMATION=UPL:ssto199cis, ACCESS_VLAN and
 CRITICAL_VLAN_ID from the site's VLAN names.
+
+## Day-N: deploy composite templates member by member (v1.10.1) ✅
+
+CCC's own device log showed the composite's `containingTemplates` JSON being
+pushed to the switch as CLI text (`% Invalid input detected`), and the deploy
+returned no taskId — a composite is a container CCC cannot render on its own.
+
+- [x] `get_deployable_templates()` expands a composite into its member ids in
+  declaration order (a plain template returns itself); a composite with no
+  usable member ids fails loudly instead of deploying nothing
+- [x] `_deploy_one()` deploys each member in sequence, polling each task, and
+  only activates NetBox after all members succeed
+- [x] Members receive only the parameters they declare; a **plain** template
+  still receives everything (proven behaviour — never drop a needed value
+  because introspection missed a parameter)
+- [x] `_task_id_of()` also accepts `deploymentId`/`deploymentJobId`, and the
+  "no taskId" error now names the template and what to check
+- [x] 204 pytest / 38 vitest / 4 e2e green
+
+**Demo:** deploying the IT-DayN composite now issues one deploy per member
+(Webasto Login Banner, IT_DayN_Port_Template) instead of one deploy of the
+container, so no JSON reaches the device CLI.

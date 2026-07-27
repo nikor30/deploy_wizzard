@@ -292,6 +292,39 @@ class CatalystCenterClient:
                     variables.append(name)
         return variables
 
+    async def get_deployable_templates(self, template_id: str) -> list[tuple[str, list[str]]]:
+        """The template(s) to actually deploy, as ordered `(id, variables)`.
+
+        A **composite** template is a container, not something CCC can render on
+        its own: deploying it pushes its `containingTemplates` JSON to the device
+        as CLI text (`% Invalid input detected`). Its members must be deployed
+        individually, in declaration order. A regular template returns itself.
+
+        Each member comes back with its own variable list so the deploy sends
+        only the parameters that member declares. A plain template returns an
+        empty list instead — meaning "send everything", which keeps the proven
+        single-template behaviour rather than risking dropping a needed value
+        because introspection missed a parameter.
+        """
+        template = await self.get_template(template_id)
+        members = template.get("containingTemplates") or []
+        if not members:
+            return [(template_id, [])]
+        deployable: list[tuple[str, list[str]]] = []
+        for member in members:
+            member_id = member.get("id") or member.get("templateId")
+            if not member_id:
+                continue
+            variables = _template_params(member)
+            if not variables:
+                variables = _template_params(await self.get_template(str(member_id)))
+            deployable.append((str(member_id), variables))
+        if not deployable:
+            raise CatalystError(
+                f"Composite template {template_id} lists no usable member templates."
+            )
+        return deployable
+
     async def deploy_template(self, payload: dict[str, Any]) -> dict[str, Any]:
         """POST deploy/v2 (§6.1); returns a task. Not retried (not idempotent).
 

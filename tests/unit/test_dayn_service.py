@@ -1,5 +1,6 @@
 """Day-N flow: prepare (introspection + resolution), deploy, activate in NetBox."""
 
+import json
 from typing import Any
 
 import app.clients.webhook as webhook_module
@@ -41,6 +42,21 @@ def _nb_detail(device_id: int) -> dict[str, Any]:
         "custom_fields": {"snmp_location": f"Rack {device_id}"},
         "config_context": {"ntp": {"servers": ["10.0.0.1"]}},
     }
+
+
+def _mock_template(respx_mock: respx.MockRouter) -> None:
+    """The deploy resolves the template first (composite -> members)."""
+    respx_mock.get(TEMPLATE_URL).respond(
+        200,
+        json={
+            "templateId": "tmpl-N",
+            "templateParams": [
+                {"parameterName": "SNMP_LOCATION"},
+                {"parameterName": "CONTACT"},
+                {"parameterName": "PVLAN"},
+            ],
+        },
+    )
 
 
 def _mock_prepare(respx_mock: respx.MockRouter) -> None:
@@ -162,6 +178,7 @@ def test_full_dayn_success_activates_netbox(client: TestClient) -> None:
     with respx.mock(assert_all_called=False) as respx_mock:
         respx_mock.route(host="testserver").pass_through()
         _mock_ccc(respx_mock)
+        _mock_template(respx_mock)
         deploy = respx_mock.post(DEPLOY_URL).respond(200, json={"response": {"taskId": "task-1"}})
         respx_mock.get(TASK_URL).respond(
             200, json={"response": {"isError": False, "endTime": 1752680000000}}
@@ -194,6 +211,7 @@ def test_task_error_with_empty_reason_drills_task_tree(client: TestClient) -> No
     with respx.mock(assert_all_called=False) as respx_mock:
         respx_mock.route(host="testserver").pass_through()
         _mock_ccc(respx_mock)
+        _mock_template(respx_mock)
         respx_mock.post(DEPLOY_URL).respond(200, json={"response": {"taskId": "task-1"}})
         respx_mock.get(TASK_URL).respond(200, json={"response": {"isError": True}})
         respx_mock.get(f"{TASK_URL}/tree").respond(
@@ -222,6 +240,7 @@ def test_netbox_patch_failure_after_success_is_partial_success(client: TestClien
     with respx.mock(assert_all_called=False) as respx_mock:
         respx_mock.route(host="testserver").pass_through()
         _mock_ccc(respx_mock)
+        _mock_template(respx_mock)
         respx_mock.post(DEPLOY_URL).respond(200, json={"response": {"taskId": "task-1"}})
         respx_mock.get(TASK_URL).respond(
             200, json={"response": {"isError": False, "endTime": 1752680000000}}
@@ -237,3 +256,44 @@ def test_netbox_patch_failure_after_success_is_partial_success(client: TestClien
     by_serial = {d["serial"]: d for d in job["devices"]}
     assert by_serial["FCW1111AAAA"]["state"] == "completed"
     assert by_serial["FCW2222BBBB"]["state"] == "activate_failed"
+
+
+def test_composite_template_deploys_each_member_not_the_container(client: TestClient) -> None:
+    """Deploying the composite itself makes CCC push its member JSON to the
+    device as CLI text; each member must be deployed on its own instead."""
+    job_id = _run_day0(client)
+    _store_dayn_mapping(client)
+    _prepare(client, job_id)
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="testserver").pass_through()
+        _mock_ccc(respx_mock)
+        respx_mock.get(TEMPLATE_URL).respond(
+            200,
+            json={
+                "templateId": "tmpl-N",
+                "composite": True,
+                "containingTemplates": [
+                    {"id": "banner", "templateParams": [{"parameterName": "CONTACT"}]},
+                    {"id": "ports", "templateParams": [{"parameterName": "SNMP_LOCATION"}]},
+                ],
+            },
+        )
+        deploy = respx_mock.post(DEPLOY_URL).respond(200, json={"response": {"taskId": "task-1"}})
+        respx_mock.get(TASK_URL).respond(
+            200, json={"response": {"isError": False, "endTime": 1752680000000}}
+        )
+        respx_mock.patch(f"{NETBOX}/api/dcim/devices/1/").respond(200, json={"id": 1})
+        respx_mock.patch(f"{NETBOX}/api/dcim/devices/2/").respond(200, json={"id": 2})
+        _deploy(client, job_id, respx_mock)
+
+    job = client.get(f"/api/wizard/jobs/{job_id}").json()
+    assert all(d["state"] == "completed" for d in job["devices"])
+
+    bodies = [json.loads(call.request.content) for call in deploy.calls]
+    # two members x two devices; the container id is never deployed
+    assert {b["templateId"] for b in bodies} == {"banner", "ports"}
+    assert "tmpl-N" not in {b["templateId"] for b in bodies}
+    # each member only receives the parameters it declares
+    for body in bodies:
+        keys = set(body["targetInfo"][0]["params"])
+        assert keys == ({"CONTACT"} if body["templateId"] == "banner" else {"SNMP_LOCATION"})
