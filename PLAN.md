@@ -809,3 +809,27 @@ returned no taskId — a composite is a container CCC cannot render on its own.
 **Demo:** deploying the IT-DayN composite now issues one deploy per member
 (Webasto Login Banner, IT_DayN_Port_Template) instead of one deploy of the
 container, so no JSON reaches the device CLI.
+
+## Day-N: track deployments properly + VLAN preselection (v1.10.2) ✅
+
+deploy/v2 answers with a **sentence**, not an id — `Deployment of Template:
+<uuid>.ApplicableTargets: [ip]Template Deploymemnt Id: <uuid>` (CCC's typo).
+v1.10.1 passed that whole string to `/task/{id}` → HTTP 400 "172.20.10 is not a
+valid UUID", which aborted the member loop: the banner member had already been
+pushed, so the port/VLAN member never ran (partial provisioning).
+
+- [x] `_deploy_handle()` returns `("task", id)` or `("deployment", uuid)`,
+  extracting the **last** UUID from CCC's sentence
+- [x] `poll_deployment()` polls
+  `template-programmer/template/deploy/status/{id}` and raises with the
+  device-level `detailedStatusMessage` (where CCC puts the CLI error)
+- [x] Access/critical VLAN: a **unique** name match stays read-only `netbox`; a
+  multi-match now prefills the lowest VID as an **editable** field
+  (`DAYN_SUGGESTIONS`) instead of resolving to nothing — same treatment as
+  Day-0's gateway guess
+- [x] Matching preselects the site's **management VLAN** by name (`mgmt`, then
+  `management`); ambiguous ⇒ left unset
+- [x] 212 pytest / 38 vitest / 4 e2e green
+
+**Demo:** a composite deploy now polls the deployment status endpoint, so every
+member runs; a failing member reports the switch's own CLI error.

@@ -9,6 +9,7 @@ empty; batches stay per-device isolated.
 import asyncio
 import ipaddress
 import logging
+import re
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from itertools import pairwise
@@ -25,6 +26,10 @@ logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 5.0
 TASK_TIMEOUT_SECONDS = 30 * 60
+
+# Terminal states of a template deployment (deploy/v2 status endpoint).
+DEPLOYMENT_SUCCEEDED = frozenset({"SUCCESS", "COMPLETED"})
+DEPLOYMENT_FAILED = frozenset({"FAILURE", "FAILED", "ERROR"})
 
 MANUAL = "manual"
 MAPPED = "mapped"
@@ -85,6 +90,16 @@ DAYN_ALIASES: dict[str, str] = {
     "ACCESSVLANID": "device.access_vlan",
     "CRITICALVLAN": "device.critical_vlan",
     "CRITICALVLANID": "device.critical_vlan",
+}
+
+# Values the tool can only *suggest* (several NetBox candidates matched). They
+# render as editable manual fields prefilled with the suggestion — the operator
+# confirms — rather than as a read-only value that might be the wrong VLAN.
+DAYN_SUGGESTIONS: dict[str, str] = {
+    "ACCESSVLAN": "device.access_vlan_suggested",
+    "ACCESSVLANID": "device.access_vlan_suggested",
+    "CRITICALVLAN": "device.critical_vlan_suggested",
+    "CRITICALVLANID": "device.critical_vlan_suggested",
 }
 
 
@@ -175,18 +190,32 @@ def _is_access_role(device: dict[str, Any]) -> bool:
     return "access" in str(role).lower()
 
 
-def _vlan_by_name(site_vlans: list[dict[str, Any]] | None, keyword: str) -> str | None:
-    """VID of the site VLAN whose name contains `keyword` (case-insensitive).
-
-    Several matches are ambiguous — the operator picks — so only a single hit
-    resolves; the lowest VID wins nothing here, we simply stay manual.
-    """
+def _vlans_by_name(site_vlans: list[dict[str, Any]] | None, keyword: str) -> list[str]:
+    """VIDs of the site VLANs whose name contains `keyword`, lowest VID first."""
     hits = [
-        str(vlan["vid"])
+        int(vlan["vid"])
         for vlan in site_vlans or []
         if vlan.get("vid") is not None and keyword in str(vlan.get("name") or "").lower()
     ]
+    return [str(vid) for vid in sorted(hits)]
+
+
+def _vlan_by_name(site_vlans: list[dict[str, Any]] | None, keyword: str) -> str | None:
+    """VID of the site VLAN whose name contains `keyword` — only when it is the
+    single match, so a confident value is never a guess."""
+    hits = _vlans_by_name(site_vlans, keyword)
     return hits[0] if len(hits) == 1 else None
+
+
+def _vlan_suggestion(site_vlans: list[dict[str, Any]] | None, keyword: str) -> str | None:
+    """Best candidate when several site VLANs match `keyword` (lowest VID).
+
+    Offered as a *suggestion* in an editable field rather than a read-only
+    value: picking the wrong VLAN would misconfigure the port, so the operator
+    confirms it — the same treatment Day-0 gives its gateway guess.
+    """
+    hits = _vlans_by_name(site_vlans, keyword)
+    return hits[0] if len(hits) > 1 else None
 
 
 def _manual(variable: str) -> dict[str, Any]:
@@ -241,6 +270,12 @@ def resolve_variables(
             value = resolve_path(context, alias) if alias else None
             if value is not None:
                 result[variable] = {"value": value, "source": NETBOX}
+                continue
+            # ambiguous match -> prefilled but editable, operator confirms
+            suggestion = DAYN_SUGGESTIONS.get(norm)
+            value = resolve_path(context, suggestion) if suggestion else None
+            if value is not None:
+                result[variable] = {"value": value, "source": MANUAL}
                 continue
         if norm in by_norm:
             result[variable] = {"value": SECRET_MASK, "source": SECRET, "secret": by_norm[norm]}
@@ -307,6 +342,10 @@ def build_device_context(
     # VLANs picked out of the site's VLAN list by name.
     ctx["access_vlan"] = _vlan_by_name(site_vlans, "access")
     ctx["critical_vlan"] = _vlan_by_name(site_vlans, "critical")
+    # several VLANs match the keyword -> offer the lowest VID as an editable
+    # suggestion instead of silently committing to one of them
+    ctx["access_vlan_suggested"] = _vlan_suggestion(site_vlans, "access")
+    ctx["critical_vlan_suggested"] = _vlan_suggestion(site_vlans, "critical")
     ctx["support_contact"] = _resolve_contact(device, contacts)
 
     address = (device.get("primary_ip4") or {}).get("address")
@@ -440,21 +479,71 @@ def _set_device(device_id: int, state: str, error: str | None = None) -> None:
                 device.dayn_finished_at = datetime.now(tz=UTC)
 
 
-def _task_id_of(response: dict[str, Any]) -> str:
-    """Task id from a deploy response.
+UUID_RE = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 
-    CCC wraps it as `{"response": {"taskId": ...}}`, but some builds answer with
-    a bare `taskId`, or with `deploymentId`/`deploymentJobId` for template
-    deploys — all name the same task, so accept any of them.
+
+def _deploy_handle(response: dict[str, Any]) -> tuple[str, str]:
+    """How to track a deploy: `("task", id)` or `("deployment", id)`.
+
+    deploy/v2 answers with a `deploymentId` that is a *sentence*, not an id:
+    ``Deployment of Template: <template-uuid>.ApplicableTargets: [10.0.0.1]
+    Template Deploymemnt Id: <deployment-uuid>`` (CCC's own typo). Polling that
+    string as a task id gives HTTP 400 ("… is not a valid UUID"), so the real
+    deployment UUID — the **last** one in the sentence — is extracted and
+    tracked via the deployment-status endpoint instead. A plain `taskId` is
+    still polled as a task.
     """
     inner = response.get("response")
     inner = inner if isinstance(inner, dict) else {}
     for source in (inner, response):
-        for key in ("taskId", "deploymentId", "deploymentJobId"):
-            value = source.get(key)
-            if value:
-                return str(value)
-    return ""
+        task_id = source.get("taskId")
+        if task_id:
+            return "task", str(task_id)
+    for source in (inner, response):
+        for key in ("deploymentId", "deploymentJobId"):
+            raw = source.get(key)
+            if not raw:
+                continue
+            uuids = UUID_RE.findall(str(raw))
+            if uuids:
+                return "deployment", uuids[-1]
+            return "deployment", str(raw)
+    return "", ""
+
+
+async def poll_deployment(
+    client: CatalystCenterClient,
+    deployment_id: str,
+    *,
+    poll_interval: float = POLL_INTERVAL_SECONDS,
+    task_timeout: float = TASK_TIMEOUT_SECONDS,
+) -> None:
+    """Poll a template deployment until it ends; raise with the device-level
+    reason on failure (that is where CCC puts the CLI error)."""
+    deadline = asyncio.get_event_loop().time() + task_timeout
+    while True:
+        status_body = await client.get_deployment_status(deployment_id)
+        status = str(status_body.get("status") or "").upper()
+        if status in DEPLOYMENT_FAILED:
+            reasons = [
+                str(device.get("detailedStatusMessage") or "").strip()
+                for device in status_body.get("devices") or []
+                if str(device.get("status") or "").upper() in DEPLOYMENT_FAILED
+            ]
+            reason = next((r for r in reasons if r), "") or str(
+                status_body.get("statusMessage") or ""
+            )
+            raise PnPBridgeError(
+                f"Catalyst Center template deployment failed: {reason or 'no reason given'}"
+            )
+        if status in DEPLOYMENT_SUCCEEDED:
+            return
+        if asyncio.get_event_loop().time() > deadline:
+            raise TaskTimeout(
+                f"Template deployment {deployment_id} did not finish within "
+                f"{task_timeout / 60:.0f} minutes (last status: {status or 'unknown'})."
+            )
+        await asyncio.sleep(poll_interval)
 
 
 async def _deploy_one(
@@ -498,14 +587,22 @@ async def _deploy_one(
                     return
                 payload = build_deploy_payload(member_id, device, member_params)
             response = await client.deploy_template(payload)
-            task_id = _task_id_of(response)
-            if not task_id:
+            kind, handle = _deploy_handle(response)
+            if not handle:
                 raise PnPBridgeError(
                     f"Catalyst Center accepted the deploy of template {member_id} but returned "
-                    "no taskId, so it cannot be tracked. Check the template in CCC "
-                    "(is it committed/versioned?) and the Logs page for the full response."
+                    "neither a taskId nor a deploymentId, so it cannot be tracked. Check the "
+                    "template in CCC (is it committed/versioned?) and the Logs page for the "
+                    "full response."
                 )
-            await poll_task(client, task_id, poll_interval=poll_interval, task_timeout=task_timeout)
+            if kind == "deployment":
+                await poll_deployment(
+                    client, handle, poll_interval=poll_interval, task_timeout=task_timeout
+                )
+            else:
+                await poll_task(
+                    client, handle, poll_interval=poll_interval, task_timeout=task_timeout
+                )
     except PnPBridgeError as exc:
         logger.error("Day-N failed for device", extra={"job_id": job_id, "serial": serial})
         _set_device(device_id, "dayn_failed", error=exc.message)

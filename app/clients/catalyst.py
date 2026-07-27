@@ -342,6 +342,15 @@ class CatalystCenterClient:
             response = await self._request("POST", DEPLOY_V1_PATH, json=payload)
         return dict(response.json())
 
+    async def get_deployment_status(self, deployment_id: str) -> dict[str, Any]:
+        """Status of a template deployment (deploy/v2 returns a deployment, not
+        a task): `{status, devices: [{status, detailedStatusMessage}], ...}`."""
+        response = await self._get(
+            f"/dna/intent/api/v1/template-programmer/template/deploy/status/{deployment_id}"
+        )
+        body = response.json()
+        return dict(body.get("response", body))
+
     async def get_task(self, task_id: str) -> dict[str, Any]:
         response = await self._get(f"/dna/intent/api/v1/task/{task_id}")
         body = response.json()

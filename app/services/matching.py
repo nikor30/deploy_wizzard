@@ -149,3 +149,26 @@ async def match_serials(
             )
         )
     return results
+
+
+# VLAN name fragments that identify a site's management VLAN, most specific
+# first — "mgmt" is the convention, "management" the spelled-out variant.
+MGMT_VLAN_KEYWORDS = ("mgmt", "management")
+
+
+def preselect_mgmt_vlan(vlan_options: list[dict[str, Any]]) -> int | None:
+    """VID of the site VLAN whose name identifies it as the management VLAN.
+
+    Only a single hit is used: two VLANs matching the same keyword is genuinely
+    ambiguous, and picking the wrong management VLAN would strand the device, so
+    the operator chooses instead.
+    """
+    for keyword in MGMT_VLAN_KEYWORDS:
+        hits = [
+            option["vid"]
+            for option in vlan_options
+            if option.get("vid") is not None and keyword in str(option.get("name") or "").lower()
+        ]
+        if len(hits) == 1:
+            return int(hits[0])
+    return None
