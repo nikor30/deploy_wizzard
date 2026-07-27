@@ -117,6 +117,65 @@ def test_pnp_devices_lists_failed_device_not_only_unclaimed(client: TestClient) 
     assert device["state"] == "Error"
 
 
+def test_pnp_state_filter_defaults_to_actionable_states(client: TestClient) -> None:
+    flags = client.get("/api/settings/flags").json()
+    assert flags["pnp_states"] == ["Unclaimed", "Planned", "Onboarding", "Error"]
+
+
+def test_pnp_state_filter_roundtrip_and_canonical_order(client: TestClient) -> None:
+    saved = client.put(
+        "/api/settings/flags",
+        json={"debug": False, "pnp_states": ["Provisioned", "Unclaimed"]},
+    )
+    assert saved.status_code == 200
+    # stored in canonical order so Unclaimed still sorts first
+    assert saved.json()["pnp_states"] == ["Unclaimed", "Provisioned"]
+    assert client.get("/api/settings/flags").json()["pnp_states"] == ["Unclaimed", "Provisioned"]
+
+
+def test_pnp_state_filter_rejects_unknown_and_empty(client: TestClient) -> None:
+    assert client.put("/api/settings/flags", json={"pnp_states": ["Bogus"]}).status_code == 422
+    assert client.put("/api/settings/flags", json={"pnp_states": []}).status_code == 422
+
+
+def test_pnp_devices_queries_only_the_selected_states(client: TestClient) -> None:
+    """Selecting Provisioned surfaces already-onboarded devices for
+    troubleshooting; unselected states are not queried at all."""
+    client.put(
+        "/api/settings/flags",
+        json={"debug": False, "pnp_states": ["Unclaimed", "Provisioned"]},
+    )
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="testserver").pass_through()
+        respx_mock.post(f"{CCC}/dna/system/api/v1/auth/token").respond(200, json={"Token": "tok"})
+
+        def by_state(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("state") == "Provisioned":
+                return httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "id": "pnp-done",
+                            "deviceInfo": {"serialNumber": "FCWDONE0001", "state": "Provisioned"},
+                        }
+                    ],
+                )
+            return httpx.Response(200, json=[])
+
+        pnp = respx_mock.get(f"{CCC}/dna/intent/api/v1/onboarding/pnp-device").mock(
+            side_effect=by_state
+        )
+        _store_credentials(client)
+        response = client.get("/api/wizard/pnp-devices")
+
+    assert response.status_code == 200
+    (device,) = response.json()
+    assert device["serial"] == "FCWDONE0001"
+    assert device["state"] == "Provisioned"
+    queried = {call.request.url.params["state"] for call in pnp.calls}
+    assert queried == {"Unclaimed", "Provisioned"}  # Error/Planned not polled
+
+
 def test_job_lifecycle_create_get_resume(client: TestClient) -> None:
     created = client.post(
         "/api/wizard/jobs",

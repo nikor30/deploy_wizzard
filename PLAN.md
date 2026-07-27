@@ -675,3 +675,24 @@ hostname variable; its `SET_HOSTNAME` task reads the PnP device record's name
 
 **Demo:** claiming SVEL051-style device now sends `hostname: sw-vel-051` in the
 site-claim, so `SET_HOSTNAME` names the box from NetBox instead of `Switch`.
+
+## Settings: configurable PnP device-state filter for wizard step 1 (v1.7.0) ✅
+
+Step 1 listed a fixed set of PnP states; operators need to widen it (e.g. to
+confirm a device really reached `Provisioned`) without a code change.
+
+- [x] `PNP_SELECTABLE_STATES` — the actionable four plus the terminal
+  `Provisioned`/`Deleted`, offered as choices
+- [x] `pnp_states` stored in the `app_settings` key/value table alongside
+  `debug`; `GET/PUT /api/settings/flags` carries it, validated against the known
+  states (unknown ⇒ 422, empty ⇒ 422) and normalized to canonical order so
+  `Unclaimed` still sorts first
+- [x] `settings_store.pnp_states()` falls back to the actionable default when
+  unset or unreadable, so a bad row can never blank the device list
+- [x] `GET /api/wizard/pnp-devices` queries only the selected states
+- [x] Settings → Credentials → "PnP device states" checkbox group with a hint
+  per state; last remaining state cannot be unchecked
+- [x] 174 pytest / 37 vitest / 4 e2e green
+
+**Demo:** tick `Provisioned` in Settings and step 1 also lists already-onboarded
+devices (CCC is polled only for the ticked states); untick it and they vanish.

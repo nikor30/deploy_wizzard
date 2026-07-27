@@ -29,6 +29,19 @@ PAGE_SIZE = 50
 # and left out to keep the list focused on devices that still need work.
 PNP_ACTIONABLE_STATES: tuple[str, ...] = ("Unclaimed", "Planned", "Onboarding", "Error")
 
+# Every PnP state an operator may choose to list in wizard step 1 (Settings →
+# Credentials → "PnP device states"). Superset of the actionable default: the
+# terminal states are selectable for troubleshooting, e.g. to confirm a device
+# really did reach Provisioned, without becoming visible noise by default.
+PNP_SELECTABLE_STATES: tuple[str, ...] = (
+    "Unclaimed",
+    "Planned",
+    "Onboarding",
+    "Error",
+    "Provisioned",
+    "Deleted",
+)
+
 
 class CatalystCenterClient:
     def __init__(

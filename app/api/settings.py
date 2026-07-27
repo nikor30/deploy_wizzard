@@ -4,11 +4,15 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.clients.catalyst import CatalystCenterClient
+from app.clients.catalyst import (
+    PNP_ACTIONABLE_STATES,
+    PNP_SELECTABLE_STATES,
+    CatalystCenterClient,
+)
 from app.clients.netbox import NetBoxClient
 from app.crypto import mask_secret
 from app.db.models import AppSetting, DayNMapping, ServiceSettings, TemplateSecret
@@ -17,6 +21,7 @@ from app.errors import PnPBridgeError
 from app.services import settings_store
 from app.services.connections import get_catalyst_client, get_netbox_client
 from app.services.dayn import load_device_context, resolve_variables
+from app.services.settings_store import pnp_states
 from app.services.suggest import suggest_variable_mappings
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -369,6 +374,20 @@ class AppFlags(BaseModel):
     # global "debug" view: show the source of every wizard variable
     # (netbox / mapped / manual) so operators can verify Day-0/Day-N coverage
     debug: bool = False
+    # PnP workflow states listed in wizard step 1. Defaults to the actionable
+    # set; operators can widen it (e.g. add Provisioned) for troubleshooting.
+    pnp_states: list[str] = list(PNP_ACTIONABLE_STATES)
+
+    @field_validator("pnp_states")
+    @classmethod
+    def _known_states(cls, value: list[str]) -> list[str]:
+        unknown = [state for state in value if state not in PNP_SELECTABLE_STATES]
+        if unknown:
+            raise ValueError(f"Unknown PnP state(s): {', '.join(unknown)}")
+        if not value:
+            raise ValueError("Select at least one PnP device state.")
+        # keep the canonical order so Unclaimed sorts first in the device list
+        return [state for state in PNP_SELECTABLE_STATES if state in value]
 
 
 def _flag(db: Session, key: str) -> bool:
@@ -376,19 +395,25 @@ def _flag(db: Session, key: str) -> bool:
     return row is not None and row.value == "true"
 
 
+def _set_setting(db: Session, key: str, value: str) -> None:
+    row = db.get(AppSetting, key)
+    if row is None:
+        db.add(AppSetting(key=key, value=value))
+    else:
+        row.value = value
+
+
 @router.get("/flags")
 def get_flags(db: DbSession) -> AppFlags:
-    return AppFlags(debug=_flag(db, "debug"))
+    return AppFlags(debug=_flag(db, "debug"), pnp_states=pnp_states(db))
 
 
 @router.put("/flags")
 def put_flags(payload: AppFlags, db: DbSession) -> AppFlags:
-    value = "true" if payload.debug else "false"
-    row = db.get(AppSetting, "debug")
-    if row is None:
-        db.add(AppSetting(key="debug", value=value))
-    else:
-        row.value = value
+    _set_setting(db, "debug", "true" if payload.debug else "false")
+    _set_setting(db, "pnp_states", ",".join(payload.pnp_states))
     db.flush()
-    logger.info("Set debug flag to %s", payload.debug)
-    return AppFlags(debug=payload.debug)
+    logger.info(
+        "Set app flags: debug=%s pnp_states=%s", payload.debug, ",".join(payload.pnp_states)
+    )
+    return payload

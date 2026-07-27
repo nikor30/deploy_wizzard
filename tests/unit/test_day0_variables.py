@@ -314,6 +314,13 @@ def test_day0_prepare_endpoint_previews_variables(client: TestClient) -> None:
 
 
 def test_debug_flag_roundtrip(client: TestClient) -> None:
-    assert client.get("/api/settings/flags").json() == {"debug": False}
-    assert client.put("/api/settings/flags", json={"debug": True}).json() == {"debug": True}
-    assert client.get("/api/settings/flags").json() == {"debug": True}
+    assert client.get("/api/settings/flags").json()["debug"] is False
+    assert client.put("/api/settings/flags", json={"debug": True}).json()["debug"] is True
+    assert client.get("/api/settings/flags").json()["debug"] is True
+    # toggling debug must not disturb the PnP state filter
+    assert client.get("/api/settings/flags").json()["pnp_states"] == [
+        "Unclaimed",
+        "Planned",
+        "Onboarding",
+        "Error",
+    ]

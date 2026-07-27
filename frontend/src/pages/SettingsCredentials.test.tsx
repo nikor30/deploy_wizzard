@@ -65,6 +65,63 @@ describe('SettingsCredentials', () => {
     expect(body.netbox.secret).toBeNull()
   })
 
+  it('shows the PnP state filter and saves a widened selection', async () => {
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        url === '/api/settings/flags'
+          ? jsonResponse({
+              debug: false,
+              pnp_states: ['Unclaimed', 'Planned', 'Onboarding', 'Error'],
+            })
+          : jsonResponse(storedCredentials),
+      ),
+    )
+    render(<SettingsCredentials />)
+
+    const provisioned = await screen.findByLabelText('List Provisioned devices')
+    expect(provisioned).not.toBeChecked()
+    expect(screen.getByLabelText('List Unclaimed devices')).toBeChecked()
+
+    await userEvent.click(provisioned)
+
+    await waitFor(() => {
+      const flagCall = fetchMock.mock.calls.find(
+        ([url, init]) => url === '/api/settings/flags' && (init as RequestInit)?.method === 'PUT',
+      )
+      expect(flagCall).toBeDefined()
+      expect(JSON.parse((flagCall![1] as RequestInit).body as string).pnp_states).toEqual([
+        'Unclaimed',
+        'Planned',
+        'Onboarding',
+        'Error',
+        'Provisioned',
+      ])
+    })
+  })
+
+  it('keeps at least one PnP state selected', async () => {
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        url === '/api/settings/flags'
+          ? jsonResponse({ debug: false, pnp_states: ['Unclaimed'] })
+          : jsonResponse(storedCredentials),
+      ),
+    )
+    render(<SettingsCredentials />)
+
+    const unclaimed = await screen.findByLabelText('List Unclaimed devices')
+    expect(unclaimed).toBeChecked()
+    await userEvent.click(unclaimed)
+
+    // unchecking the last state is a no-op — no PUT, still checked
+    expect(unclaimed).toBeChecked()
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]) => url === '/api/settings/flags' && (init as RequestInit)?.method === 'PUT',
+      ),
+    ).toHaveLength(0)
+  })
+
   it('runs a connection test and shows the result', async () => {
     fetchMock.mockImplementation((url: string) =>
       Promise.resolve(
