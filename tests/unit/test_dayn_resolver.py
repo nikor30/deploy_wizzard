@@ -190,3 +190,17 @@ def test_unique_vlan_match_is_read_only_netbox() -> None:
     device = {**STO_DEVICE, "access_vlan": "200", "access_vlan_suggested": None}
     resolved = resolve_variables(["ACCESS_VLAN"], {}, {"device": device})
     assert resolved["ACCESS_VLAN"] == {"value": "200", "source": "netbox"}
+
+
+def test_native_vlan_takes_the_access_vlan() -> None:
+    """The trunk carries the access VLAN untagged, so NATIVE_VLAN_ID is the
+    access VLAN id (299 at site STO) rather than a manual entry."""
+    device = {**STO_DEVICE, "access_vlan": "299", "access_vlan_suggested": None}
+    resolved = resolve_variables(["NATIVE_VLAN_ID"], {}, {"device": device})
+    assert resolved["NATIVE_VLAN_ID"] == {"value": "299", "source": "netbox"}
+
+
+def test_native_vlan_falls_back_to_the_editable_suggestion() -> None:
+    device = {**STO_DEVICE, "access_vlan": None, "access_vlan_suggested": "200"}
+    resolved = resolve_variables(["NATIVE_VLAN_ID"], {}, {"device": device})
+    assert resolved["NATIVE_VLAN_ID"] == {"value": "200", "source": "manual"}
