@@ -723,3 +723,29 @@ no `templateParams` of its own — they live in the member templates under
 **Demo:** picking a composite Day-0 template now previews HOSTNAME/GATEWAY from
 its members instead of an empty variable list; typing `onboarding` in the Day-0
 filter narrows step 3's dropdown to the onboarding templates only.
+
+## Day-N built-in NetBox aliases + hidden variables (v1.9.0) ✅
+
+Day-N resolved variables **only** via the manually configured `DayNMapping`
+table — unlike Day-0, which has built-in aliases — so on the real IT-DayN
+template nearly every field came up as a required manual entry.
+
+- [x] `DAYN_ALIASES` — built-in variable→dot-path map ported from the
+  netbox_cc_dayn project's `mappings.yaml`: site/location/rack/role/asset tag,
+  rack position, plus the values `build_device_context()` already derived but
+  nothing consumed (`support_contact`, `uplink_switch`, `uplink_ports`,
+  `site_vlans`/`arrVLANs`)
+- [x] Resolution order: explicit mapping (operator config always wins) →
+  built-in alias (source `netbox`) → global variable/secret by name → manual
+- [x] Variables with no NetBox source (PRIMARYVLAN, PO_ID, NATIVE_VLAN_ID, …)
+  deliberately stay manual — design choices are not guessed
+- [x] `hidden_variable()` now also applies to Day-N: CCC's garbled
+  password-derived names **and** its `__device`/`__interface` bindings (CCC
+  fills those itself; asking for them blocked the deploy button)
+- [x] Junk detector de-duplicated — moved to `dayn.py`, imported by `day0.py`
+- [x] 187 pytest / 38 vitest / 4 e2e green
+
+**Demo:** for FOC2335U0FT on site STO, Day-N now prefills SITE_FULL_NAME,
+BUILDING_ROOM, DEVICE_ROLE, ASSET_ID, RACK_ID, RACK_POSITION, SUPPORT_CONTACT,
+UPLINK_SWITCH, UPLINK_PORTS and ARRVLANS from NetBox; only the genuine design
+choices remain open, and the junk/binding variables are gone.

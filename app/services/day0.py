@@ -9,7 +9,6 @@ import ipaddress
 import logging
 from collections.abc import Iterable
 from datetime import UTC, datetime
-from itertools import pairwise
 from typing import Any
 
 from sqlalchemy import select
@@ -20,7 +19,7 @@ from app.db.models import Job, JobDevice, ServiceSettings, TemplateSecret, Webho
 from app.db.session import open_session
 from app.errors import ConfigurationError, PnPBridgeError, TaskTimeout
 from app.services import settings_store
-from app.services.dayn import SECRET, SECRET_MASK, resolve_path
+from app.services.dayn import SECRET, SECRET_MASK, hidden_variable, resolve_path
 from app.services.matching import MATCHED
 
 logger = logging.getLogger(__name__)
@@ -98,30 +97,6 @@ def _normalize_var(name: str) -> str:
     return "".join(c for c in name.upper() if c.isalnum())
 
 
-def _looks_like_junk_var(name: str) -> bool:
-    """Detect the garbled variable names Catalyst Center generates from password
-    values (e.g. ``pPYzdaRZdKO5gppL7ddKhk3iF``, ``OaMGKyQBNwDjxFcagpT``). These
-    are noise leaked into the template's parameter list and must never be shown
-    to the operator or sent in a claim. Operates on the ORIGINAL mixed-case name
-    (case pattern is the tell), never the normalized form.
-
-    A name is junk when it is a single opaque token: no separators, long, mixed
-    upper/lower case, and either contains digits or flips case many times — the
-    fingerprint of a random secret, not a human-authored variable name."""
-    if any(sep in name for sep in "_-. /:"):
-        return False
-    if len(name) < 16:
-        return False
-    has_upper = any(c.isupper() for c in name)
-    has_lower = any(c.islower() for c in name)
-    if not (has_upper and has_lower):
-        return False
-    has_digit = any(c.isdigit() for c in name)
-    letters = [c for c in name if c.isalpha()]
-    case_transitions = sum(1 for a, b in pairwise(letters) if a.isupper() != b.isupper())
-    return has_digit or case_transitions >= 5
-
-
 def day0_builtins(device: JobDevice) -> dict[str, str]:
     """The standard onboarding values derived from the NetBox match: hostname,
     mgmt IP/mask/prefix/subnet, mgmt VLAN + its name, and a best-effort gateway
@@ -165,7 +140,7 @@ def resolve_day0_variables(
     secrets_by_norm = {_normalize_var(name): name for name in secret_names}
     result: dict[str, dict[str, Any]] = {}
     for variable in variables:
-        if _looks_like_junk_var(variable):
+        if hidden_variable(variable):
             continue
         norm = _normalize_var(variable)
         key = DAY0_ALIASES.get(norm)

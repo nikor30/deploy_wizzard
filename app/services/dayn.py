@@ -11,6 +11,7 @@ import ipaddress
 import logging
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from itertools import pairwise
 from typing import Any
 
 from app.clients.catalyst import CatalystCenterClient
@@ -27,9 +28,89 @@ TASK_TIMEOUT_SECONDS = 30 * 60
 
 MANUAL = "manual"
 MAPPED = "mapped"
+NETBOX = "netbox"
 SECRET = "secret"
 SECRET_PREFIX = "secret."
 SECRET_MASK = "****"
+
+# Built-in Day-N variable → NetBox dot-path map, ported from the netbox_cc_dayn
+# project's mappings.yaml (the field choices are proven against the live
+# templates). Without these every Day-N variable had to be mapped by hand in
+# Settings before it would fill. An explicit mapping still wins over an alias,
+# so operators can override any of these per deployment.
+DAYN_ALIASES: dict[str, str] = {
+    # identity / placement
+    "HOSTNAME": "device.name",
+    "DEVICENAME": "device.name",
+    "SERIAL": "device.serial",
+    "SERIALNUMBER": "device.serial",
+    "ASSETID": "device.asset_tag",
+    "ASSETTAG": "device.asset_tag",
+    "SITEFULLNAME": "device.site.name",
+    "SITE": "device.site.name",
+    "SITENAME": "device.site.name",
+    "BUILDINGROOM": "device.location.name",
+    "LOCATION": "device.location.name",
+    "BASICLOCATIONINFORMATION": "device.location.name",
+    "RACKID": "device.rack.name",
+    "RACK": "device.rack.name",
+    "RACKNAME": "device.rack.name",
+    "RACKPOSITION": "device.position",
+    "POSITION": "device.position",
+    "DEVICEROLE": "device.role.name",
+    "ROLE": "device.role.name",
+    "SWITCHTYPE": "device.role.name",
+    "PLATFORM": "device.platform.name",
+    "DEVICETYPE": "device.device_type.model",
+    "TENANT": "device.tenant.name",
+    # derived values built in build_device_context()
+    "SUPPORTCONTACT": "device.support_contact",
+    "UPLINKSWITCH": "device.uplink_switch",
+    "UPLINKPORTS": "device.uplink_ports",
+    "ARRVLANS": "device.site_vlans",
+    "SITEVLANS": "device.site_vlans",
+}
+
+
+def normalize_var(name: str) -> str:
+    return "".join(c for c in name.upper() if c.isalnum())
+
+
+def is_internal_var(name: str) -> bool:
+    """CCC binding variables (`__device`, `__interface`) are filled by Catalyst
+    Center itself at deploy time — they are not operator input, so asking for
+    them would block the wizard on values nobody can supply."""
+    return name.startswith("__")
+
+
+def looks_like_junk_var(name: str) -> bool:
+    """Detect the garbled variable names Catalyst Center generates from password
+    values (e.g. ``pPYzdaRZdKO5gppL7ddKhk3iF``, ``OaMGKyQBNwDjxFcagpT``). These
+    are noise leaked into the template's parameter list and must never be shown
+    to the operator or sent in a claim/deploy. Operates on the ORIGINAL
+    mixed-case name (the case pattern is the tell), never the normalized form.
+
+    A name is junk when it is a single opaque token: no separators, long, mixed
+    upper/lower case, and either contains digits or flips case many times — the
+    fingerprint of a random secret, not a human-authored variable name."""
+    if any(sep in name for sep in "_-. /:"):
+        return False
+    if len(name) < 16:
+        return False
+    has_upper = any(c.isupper() for c in name)
+    has_lower = any(c.islower() for c in name)
+    if not (has_upper and has_lower):
+        return False
+    has_digit = any(c.isdigit() for c in name)
+    letters = [c for c in name if c.isalpha()]
+    case_transitions = sum(1 for a, b in pairwise(letters) if a.isupper() != b.isupper())
+    return has_digit or case_transitions >= 5
+
+
+def hidden_variable(name: str) -> bool:
+    """Variables the operator must never be asked for: CCC-internal bindings
+    and Catalyst Center's garbled password-derived names."""
+    return is_internal_var(name) or looks_like_junk_var(name)
 
 
 def resolve_path(context: dict[str, Any], path: str) -> str | None:
@@ -61,15 +142,22 @@ def resolve_variables(
     """Resolve each template variable via its mapping; anything that cannot be
     resolved is flagged for manual entry in the wizard.
 
+    Resolution order per variable: hidden names (CCC bindings / garbled
+    password leaks) are dropped → explicit mapping (operator config always
+    wins) → built-in NetBox alias (`DAYN_ALIASES`) → global variable / secret
+    matched by name → open for manual entry.
+
     `secret.<NAME>` paths resolve to a masked placeholder — the plaintext is
     decrypted just-in-time when building the deploy payload, never stored on
     the job or returned by the API. A secret whose name matches a template
     variable also auto-fills it (a "global variable" set once, used everywhere)
     without an explicit mapping."""
     known_secrets = set(secret_names)
-    by_norm = {"".join(c for c in n.upper() if c.isalnum()): n for n in known_secrets}
+    by_norm = {normalize_var(n): n for n in known_secrets}
     result: dict[str, dict[str, Any]] = {}
     for variable in variables:
+        if hidden_variable(variable):
+            continue
         path = mappings.get(variable)
         if path and path.startswith(SECRET_PREFIX):
             name = path.removeprefix(SECRET_PREFIX)
@@ -82,7 +170,14 @@ def resolve_variables(
         if value is not None:
             result[variable] = {"value": value, "source": MAPPED}
             continue
-        norm = "".join(c for c in variable.upper() if c.isalnum())
+        norm = normalize_var(variable)
+        # built-in NetBox alias — only when the operator has no mapping for it
+        if not path:
+            alias = DAYN_ALIASES.get(norm)
+            value = resolve_path(context, alias) if alias else None
+            if value is not None:
+                result[variable] = {"value": value, "source": NETBOX}
+                continue
         if norm in by_norm:
             result[variable] = {"value": SECRET_MASK, "source": SECRET, "secret": by_norm[norm]}
         else:
