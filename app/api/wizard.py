@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -24,7 +24,12 @@ from app.services.dayn import (
     run_dayn,
 )
 from app.services.matching import MATCHED, SiteMappingLookup, match_serials
-from app.services.settings_store import get_secret_box, pnp_states
+from app.services.settings_store import (
+    filter_templates,
+    get_secret_box,
+    pnp_states,
+    template_filter,
+)
 
 router = APIRouter(prefix="/api/wizard", tags=["wizard"])
 logger = logging.getLogger(__name__)
@@ -290,12 +295,8 @@ async def prepare_day0(job_id: int, payload: Day0PrepareRequest, db: DbSession) 
         raise HTTPException(status_code=422, detail="No matched devices to claim.")
 
     async with get_catalyst_client(db) as catalyst:
-        template = await catalyst.get_template(payload.config_id)
-    variables = [
-        str(p.get("parameterName"))
-        for p in template.get("templateParams", [])
-        if p.get("parameterName")
-    ]
+        # composite-aware: a composite template's variables live in its members
+        variables = await catalyst.get_template_variables(payload.config_id)
     mappings = {m.variable: m.source_path for m in db.scalars(select(DayNMapping)).all()}
     secret_names = set(db.scalars(select(TemplateSecret.name)).all())
     async with get_netbox_client(db) as netbox:
@@ -313,18 +314,26 @@ async def prepare_day0(job_id: int, payload: Day0PrepareRequest, db: DbSession) 
 
 
 @router.get("/day0/templates")
-async def list_day0_templates(db: DbSession) -> list[Day0Template]:
+async def list_day0_templates(
+    db: DbSession, step: Literal["day0", "dayn"] = "day0"
+) -> list[Day0Template]:
+    """Templates offered in the wizard, narrowed by the step's name filter
+    (Settings → Credentials). An unset filter offers everything."""
     async with get_catalyst_client(db) as client:
         templates = await client.get_templates()
+    words = template_filter(db, step)
     result: list[Day0Template] = []
     for template in templates:
         template_id = template.get("templateId") or template.get("id")
         if not template_id:
             continue
+        name = str(template.get("name", template_id))
+        if not filter_templates([name], words):
+            continue
         result.append(
             Day0Template(
                 id=str(template_id),
-                name=str(template.get("name", template_id)),
+                name=name,
                 project=template.get("projectName"),
             )
         )
@@ -426,13 +435,8 @@ async def prepare_dayn(job_id: int, payload: DayNPrepareRequest, db: DbSession) 
         raise HTTPException(status_code=422, detail="No Day-0-successful devices in this job.")
 
     async with get_catalyst_client(db) as catalyst:
-        template = await catalyst.get_template(payload.template_id)
-    # templateParams shape per common CCC 2.3.7 payloads — verify live fixtures (§4).
-    variables = [
-        str(p.get("parameterName"))
-        for p in template.get("templateParams", [])
-        if p.get("parameterName")
-    ]
+        # composite-aware: a composite template's variables live in its members
+        variables = await catalyst.get_template_variables(payload.template_id)
 
     mappings = {m.variable: m.source_path for m in db.scalars(select(DayNMapping)).all()}
     secret_names = set(db.scalars(select(TemplateSecret.name)).all())

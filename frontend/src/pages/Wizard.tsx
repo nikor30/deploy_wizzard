@@ -588,7 +588,7 @@ function Day0View({
   const [debug, setDebug] = useState(false)
 
   useEffect(() => {
-    fetchJson<Day0Template[]>('/api/wizard/day0/templates')
+    fetchJson<Day0Template[]>('/api/wizard/day0/templates?step=day0')
       .then(setTemplates)
       .catch((err: Error) => setError(err.message))
     fetchJson<{ debug: boolean }>('/api/settings/flags')
@@ -818,7 +818,7 @@ function DayNView({ job: initialJob }: { job: Job }) {
   const [running, setRunning] = useState(initialJob.status === 'dayn_running')
 
   useEffect(() => {
-    fetchJson<Day0Template[]>('/api/wizard/day0/templates')
+    fetchJson<Day0Template[]>('/api/wizard/day0/templates?step=dayn')
       .then(setTemplates)
       .catch((err: Error) => setError(err.message))
   }, [])

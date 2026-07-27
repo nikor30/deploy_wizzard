@@ -330,3 +330,58 @@ def test_delete_running_job_rejected(client: TestClient) -> None:
 
 def test_delete_unknown_job_404(client: TestClient) -> None:
     assert client.delete("/api/wizard/jobs/999").status_code == 404
+
+
+def _templates_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json=[
+            {"templateId": "t-1", "name": "00_Webasto_OnBoarding", "projectName": "PnP"},
+            {"templateId": "t-2", "name": "IT_DayN_Baseline", "projectName": "Baseline"},
+            {"templateId": "t-3", "name": "Lab_Scratch", "projectName": "Lab"},
+        ],
+    )
+
+
+def _list_templates(client: TestClient, step: str) -> list[dict[str, str]]:
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="testserver").pass_through()
+        respx_mock.post(f"{CCC}/dna/system/api/v1/auth/token").respond(200, json={"Token": "tok"})
+        respx_mock.get(f"{CCC}/dna/intent/api/v1/template-programmer/template").mock(
+            return_value=_templates_response()
+        )
+        _store_credentials(client)
+        response = client.get("/api/wizard/day0/templates", params={"step": step})
+    assert response.status_code == 200, response.text
+    return list(response.json())
+
+
+def test_template_filter_unset_offers_every_template(client: TestClient) -> None:
+    names = [t["name"] for t in _list_templates(client, "day0")]
+    assert names == ["00_Webasto_OnBoarding", "IT_DayN_Baseline", "Lab_Scratch"]
+
+
+def test_template_filter_narrows_each_step_independently(client: TestClient) -> None:
+    client.put(
+        "/api/settings/flags",
+        json={
+            "debug": False,
+            "pnp_states": ["Unclaimed"],
+            "day0_template_filter": ["onboarding"],  # case-insensitive substring
+            "dayn_template_filter": ["DayN"],
+        },
+    )
+    assert [t["name"] for t in _list_templates(client, "day0")] == ["00_Webasto_OnBoarding"]
+    assert [t["name"] for t in _list_templates(client, "dayn")] == ["IT_DayN_Baseline"]
+
+
+def test_template_filter_roundtrip_and_comma_rejected(client: TestClient) -> None:
+    saved = client.put(
+        "/api/settings/flags",
+        json={"day0_template_filter": [" onboard ", ""], "dayn_template_filter": []},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["day0_template_filter"] == ["onboard"]  # trimmed, blanks dropped
+    assert client.get("/api/settings/flags").json()["day0_template_filter"] == ["onboard"]
+    bad = client.put("/api/settings/flags", json={"day0_template_filter": ["a,b"]})
+    assert bad.status_code == 422

@@ -696,3 +696,30 @@ confirm a device really reached `Provisioned`) without a code change.
 
 **Demo:** tick `Provisioned` in Settings and step 1 also lists already-onboarded
 devices (CCC is polled only for the ticked states); untick it and they vanish.
+
+## Composite templates + Day-0/Day-N template filters (v1.8.0) ✅
+
+Selecting a CCC **composite** template resolved no variables: a composite holds
+no `templateParams` of its own — they live in the member templates under
+`containingTemplates` — so every member variable silently went unfilled.
+
+- [x] `CatalystCenterClient.get_template_variables()` — composite-aware: unions
+  the top-level params with each member's, fetching a member by id only when its
+  stub carries no params; first occurrence wins so a shared variable is asked
+  once. Replaces the four copies of the inline `templateParams` extraction
+  (Day-0 prepare, Day-N prepare, Day-N suggest, Day-N preview)
+- [x] `_template_params()` accepts both `templateParams`/`parameterName` (2.3.7)
+  and the older `params`/`paramName` spelling
+- [x] Template name filters per step: `day0_template_filter` /
+  `dayn_template_filter` in `app_settings`, carried by `GET/PUT
+  /api/settings/flags`; words are trimmed, blanks dropped, commas rejected
+  (they are the storage separator)
+- [x] `GET /api/wizard/day0/templates?step=day0|dayn` applies the step's filter
+  (case-insensitive substring, any word matches); empty filter offers everything
+- [x] Settings → Credentials → "Template filters" — two comma-separated inputs,
+  saved on blur
+- [x] 182 pytest / 38 vitest / 4 e2e green
+
+**Demo:** picking a composite Day-0 template now previews HOSTNAME/GATEWAY from
+its members instead of an empty variable list; typing `onboarding` in the Day-0
+filter narrows step 3's dropdown to the onboarding templates only.
