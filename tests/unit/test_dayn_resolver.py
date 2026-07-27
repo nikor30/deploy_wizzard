@@ -204,3 +204,20 @@ def test_native_vlan_falls_back_to_the_editable_suggestion() -> None:
     device = {**STO_DEVICE, "access_vlan": None, "access_vlan_suggested": "200"}
     resolved = resolve_variables(["NATIVE_VLAN_ID"], {}, {"device": device})
     assert resolved["NATIVE_VLAN_ID"] == {"value": "200", "source": "manual"}
+
+
+def test_banner_device_name_and_ip_resolve_from_netbox() -> None:
+    """The Day-N banner's $device_name / $device_ip fill from the NetBox device
+    and its primary IP, so the banner no longer prints the raw variable."""
+    device = {
+        **STO_DEVICE,
+        "mgmt": {"ip": "172.20.10.145", "netmask": "255.255.255.0", "cidr": "172.20.10.0/24"},
+    }
+    resolved = resolve_variables(["device_name", "device_ip"], {}, {"device": device})
+    assert resolved["device_name"] == {"value": "ssto145cis", "source": "netbox"}
+    assert resolved["device_ip"] == {"value": "172.20.10.145", "source": "netbox"}
+
+
+def test_device_ip_stays_manual_without_a_netbox_primary_ip() -> None:
+    resolved = resolve_variables(["device_ip"], {}, {"device": STO_DEVICE})
+    assert resolved["device_ip"]["source"] == "manual"
