@@ -7,6 +7,7 @@ X-Auth-Token. Tokens live ~60 min; we refresh proactively at 55 min and on a
 """
 
 import asyncio
+import logging
 import time
 from collections.abc import Sequence
 from types import TracebackType
@@ -17,9 +18,16 @@ import httpx
 from app.clients.base import DEFAULT_TIMEOUT, get_with_retries
 from app.errors import CatalystAuthError, CatalystError
 
+logger = logging.getLogger(__name__)
+
 TOKEN_LIFETIME_SECONDS = 55 * 60
 MAX_CONCURRENT_REQUESTS = 5
 PAGE_SIZE = 50
+
+# Template deploy: v2 is the 2.3.x endpoint; the older path is the fallback
+# for builds that do not expose v2 (they take the same body).
+DEPLOY_V2_PATH = "/dna/intent/api/v1/template-programmer/template/deploy/v2"
+DEPLOY_V1_PATH = "/dna/intent/api/v1/template-programmer/template/deploy"
 
 # PnP workflow states that are still actionable for onboarding. A device that
 # failed a claim (or was reset after a failed attempt) stays in the CCC PnP
@@ -285,10 +293,20 @@ class CatalystCenterClient:
         return variables
 
     async def deploy_template(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """POST deploy/v2 (§6.1); returns a task. Not retried (not idempotent)."""
-        response = await self._request(
-            "POST", "/dna/intent/api/v1/template-programmer/template/deploy/v2", json=payload
-        )
+        """POST deploy/v2 (§6.1); returns a task. Not retried (not idempotent).
+
+        Some Catalyst Center builds do not expose `deploy/v2` and answer 404;
+        the older `template/deploy` takes the same body, so fall back to it once
+        rather than failing the whole Day-N run. Only a 404 triggers the
+        fallback — a 4xx about the payload must still surface as itself.
+        """
+        try:
+            response = await self._request("POST", DEPLOY_V2_PATH, json=payload)
+        except CatalystError as exc:
+            if "HTTP 404" not in str(exc):
+                raise
+            logger.warning("deploy/v2 not available (404) — retrying on %s", DEPLOY_V1_PATH)
+            response = await self._request("POST", DEPLOY_V1_PATH, json=payload)
         return dict(response.json())
 
     async def get_task(self, task_id: str) -> dict[str, Any]:

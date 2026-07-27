@@ -295,3 +295,32 @@ async def test_template_variables_accepts_legacy_params_key() -> None:
     )
     async with CatalystCenterClient(BASE, "admin", "pw") as client:
         assert await client.get_template_variables("tpl-legacy") == ["SNMP_LOCATION"]
+
+
+DEPLOY_V2_URL = f"{BASE}/dna/intent/api/v1/template-programmer/template/deploy/v2"
+DEPLOY_V1_URL = f"{BASE}/dna/intent/api/v1/template-programmer/template/deploy"
+
+
+@respx.mock
+async def test_deploy_falls_back_to_v1_when_v2_is_404() -> None:
+    """Some CCC builds do not expose deploy/v2; the older path takes the same
+    body, so a 404 must not fail the whole Day-N run."""
+    respx.post(TOKEN_URL).respond(200, json={"Token": "tok"})
+    v2 = respx.post(DEPLOY_V2_URL).respond(404, json={"message": "Not Found"})
+    v1 = respx.post(DEPLOY_V1_URL).respond(200, json={"response": {"taskId": "task-9"}})
+    async with CatalystCenterClient(BASE, "admin", "pw") as client:
+        result = await client.deploy_template({"templateId": "t-1", "targetInfo": []})
+    assert v2.called and v1.called
+    assert result["response"]["taskId"] == "task-9"
+
+
+@respx.mock
+async def test_deploy_does_not_fall_back_on_a_payload_error() -> None:
+    """A 400 is about the request, not the endpoint — surface it as itself."""
+    respx.post(TOKEN_URL).respond(200, json={"Token": "tok"})
+    respx.post(DEPLOY_V2_URL).respond(400, json={"message": "bad templateId"})
+    v1 = respx.post(DEPLOY_V1_URL).respond(200, json={"response": {"taskId": "task-9"}})
+    async with CatalystCenterClient(BASE, "admin", "pw") as client:
+        with pytest.raises(CatalystError, match="400"):
+            await client.deploy_template({"templateId": "t-1", "targetInfo": []})
+    assert not v1.called

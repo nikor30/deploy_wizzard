@@ -350,3 +350,60 @@ def test_preview_unknown_serial_is_404(client: TestClient) -> None:
         response = client.post("/api/settings/dayn/preview", json={"serial": "NOPE"})
     assert response.status_code == 404
     assert "NOPE" in response.json()["detail"]
+
+
+# --- uplink / VLAN conventions ----------------------------------------------
+
+ACCESS_DEVICE = {
+    "id": 42,
+    "name": "ssto145cis",
+    "role": {"name": "access"},
+    "site": {"id": 4, "name": "STO"},
+}
+CABLED = [
+    {
+        "name": "Te1/1/3",
+        "mgmt_only": False,
+        "connected_endpoints": [{"name": "Gi1/0/1", "device": {"name": "ssto199cis"}}],
+    }
+]
+SITE_VLANS = [
+    {"vid": 110, "name": "MGMT"},
+    {"vid": 200, "name": "Access-Data"},
+    {"vid": 999, "name": "CRITICAL_AUTH"},
+]
+
+
+def test_uplink_description_is_upl_plus_far_end_switch() -> None:
+    ctx = build_device_context(ACCESS_DEVICE, CABLED, SITE_VLANS, [])
+    assert ctx["device"]["uplink_switch"] == "ssto199cis"
+    assert ctx["device"]["uplink_description"] == "UPL:ssto199cis"
+
+
+def test_uplink_description_unset_without_a_unique_far_end() -> None:
+    ctx = build_device_context(ACCESS_DEVICE, [], SITE_VLANS, [])
+    assert ctx["device"]["uplink_description"] is None
+
+
+def test_access_switch_gets_port_channel_1() -> None:
+    ctx = build_device_context(ACCESS_DEVICE, CABLED, SITE_VLANS, [])
+    assert ctx["device"]["po_id"] == "1"
+
+
+def test_non_access_switch_leaves_port_channel_unset() -> None:
+    device = {**ACCESS_DEVICE, "role": {"name": "distribution"}}
+    ctx = build_device_context(device, CABLED, SITE_VLANS, [])
+    assert ctx["device"]["po_id"] is None
+
+
+def test_access_and_critical_vlans_matched_by_name() -> None:
+    ctx = build_device_context(ACCESS_DEVICE, CABLED, SITE_VLANS, [])
+    assert ctx["device"]["access_vlan"] == "200"
+    assert ctx["device"]["critical_vlan"] == "999"
+
+
+def test_ambiguous_vlan_name_stays_unset() -> None:
+    """Two VLANs matching the keyword: the operator picks, we do not guess."""
+    vlans = [{"vid": 200, "name": "Access-Data"}, {"vid": 201, "name": "Access-Voice"}]
+    ctx = build_device_context(ACCESS_DEVICE, CABLED, vlans, [])
+    assert ctx["device"]["access_vlan"] is None

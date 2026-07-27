@@ -766,3 +766,24 @@ use private VLANs.
 
 **Demo:** with PVLAN left blank the Deploy button is enabled, the deploy payload
 contains no PVLAN key, and CONTACT is still required.
+
+## Day-N deploy fallback + uplink/VLAN conventions (v1.10.0) ✅
+
+Live Day-N failed with `POST .../template/deploy/v2 → HTTP 404`, and several
+IT-DayN fields that follow a fixed convention were still manual.
+
+- [x] `deploy_template()` falls back to the older `template/deploy` path when
+  `deploy/v2` answers **404** (same body); any other 4xx still surfaces as
+  itself, so a payload error is never masked
+- [x] `uplink_description` = `UPL:<far-end switch>` from the NetBox cabling
+  (unset when the far end is missing or ambiguous)
+- [x] `po_id` = `1` for **access**-role switches; any other role stays manual
+- [x] `access_vlan` / `critical_vlan` = the VID of the site VLAN whose **name**
+  contains "access" / "critical"; two matches are ambiguous ⇒ stays manual
+- [x] Aliases wired: PO_ID/PORTCHANNEL(ID), UPLINK_DESCRIPTION and
+  UPLINK CONFIGURATION INFORMATION, ACCESS_VLAN(_ID), CRITICAL_VLAN(_ID)
+- [x] 200 pytest / 38 vitest / 4 e2e green
+
+**Demo:** for access switch ssto145cis cabled to ssto199cis, Day-N prefills
+PO_ID=1, UPLINK CONFIGURATION INFORMATION=UPL:ssto199cis, ACCESS_VLAN and
+CRITICAL_VLAN_ID from the site's VLAN names.
