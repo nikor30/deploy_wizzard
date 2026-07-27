@@ -90,6 +90,9 @@ DAYN_ALIASES: dict[str, str] = {
     "ACCESSVLANID": "device.access_vlan",
     "CRITICALVLAN": "device.critical_vlan",
     "CRITICALVLANID": "device.critical_vlan",
+    # the uplink/port trunk carries the access VLAN untagged
+    "NATIVEVLAN": "device.access_vlan",
+    "NATIVEVLANID": "device.access_vlan",
 }
 
 # Values the tool can only *suggest* (several NetBox candidates matched). They
@@ -100,6 +103,8 @@ DAYN_SUGGESTIONS: dict[str, str] = {
     "ACCESSVLANID": "device.access_vlan_suggested",
     "CRITICALVLAN": "device.critical_vlan_suggested",
     "CRITICALVLANID": "device.critical_vlan_suggested",
+    "NATIVEVLAN": "device.access_vlan_suggested",
+    "NATIVEVLANID": "device.access_vlan_suggested",
 }
 
 
@@ -191,13 +196,24 @@ def _is_access_role(device: dict[str, Any]) -> bool:
 
 
 def _vlans_by_name(site_vlans: list[dict[str, Any]] | None, keyword: str) -> list[str]:
-    """VIDs of the site VLANs whose name contains `keyword`, lowest VID first."""
-    hits = [
-        int(vlan["vid"])
-        for vlan in site_vlans or []
-        if vlan.get("vid") is not None and keyword in str(vlan.get("name") or "").lower()
-    ]
-    return [str(vid) for vid in sorted(hits)]
+    """VIDs of the site VLANs matching `keyword`, lowest VID first.
+
+    A VLAN named exactly `keyword` wins outright: a real site has both an
+    `access` VLAN and unrelated names that merely contain the word (e.g.
+    `Time_Access`), and only the exact one is the access VLAN. Substring
+    matches are used solely when no VLAN carries the bare name.
+    """
+    exact: list[int] = []
+    partial: list[int] = []
+    for vlan in site_vlans or []:
+        if vlan.get("vid") is None:
+            continue
+        name = str(vlan.get("name") or "").lower()
+        if name == keyword:
+            exact.append(int(vlan["vid"]))
+        elif keyword in name:
+            partial.append(int(vlan["vid"]))
+    return [str(vid) for vid in sorted(exact or partial)]
 
 
 def _vlan_by_name(site_vlans: list[dict[str, Any]] | None, keyword: str) -> str | None:

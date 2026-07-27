@@ -421,3 +421,29 @@ def test_ambiguous_vlan_keyword_yields_a_suggestion_not_a_value() -> None:
     # the unique critical match stays a confident value
     assert ctx["critical_vlan"] == "999"
     assert ctx["critical_vlan_suggested"] is None
+
+
+# The real STO VLAN list: an exact "access" VLAN alongside names that merely
+# contain the word, plus an exact "critical" VLAN.
+STO_SITE_VLANS = [
+    {"vid": 299, "name": "access"},
+    {"vid": 1570, "name": "Time_Access"},
+    {"vid": 1010, "name": "critical"},
+    {"vid": 900, "name": "LAN_MGMT"},
+]
+
+
+def test_exact_vlan_name_wins_over_a_partial_one() -> None:
+    """VLAN 299 is named exactly "access"; 1570 "Time_Access" merely contains
+    the word and must not make the match ambiguous."""
+    ctx = build_device_context(ACCESS_DEVICE, CABLED, STO_SITE_VLANS, [])["device"]
+    assert ctx["access_vlan"] == "299"
+    assert ctx["access_vlan_suggested"] is None
+    assert ctx["critical_vlan"] == "1010"
+
+
+def test_partial_matches_still_used_when_no_exact_name_exists() -> None:
+    vlans = [{"vid": 1570, "name": "Time_Access"}, {"vid": 200, "name": "Access-Data"}]
+    ctx = build_device_context(ACCESS_DEVICE, CABLED, vlans, [])["device"]
+    assert ctx["access_vlan"] is None  # ambiguous
+    assert ctx["access_vlan_suggested"] == "200"  # lowest VID, editable

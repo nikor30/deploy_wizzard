@@ -833,3 +833,23 @@ pushed, so the port/VLAN member never ran (partial provisioning).
 
 **Demo:** a composite deploy now polls the deployment status endpoint, so every
 member runs; a failing member reports the switch's own CLI error.
+
+## Day-N: exact VLAN-name match + native VLAN (v1.10.3) ✅
+
+Site STO has `(299,access)` **and** `(1570,Time_Access)`, so the substring rule
+made "access" ambiguous; NATIVE_VLAN_ID had no alias at all and stayed manual.
+
+- [x] `_vlans_by_name()` prefers an **exact** VLAN-name match (`access`) over
+  names that merely contain the word (`Time_Access`); substrings are used only
+  when no VLAN carries the bare name
+- [x] `NATIVE_VLAN` / `NATIVE_VLAN_ID` → the access VLAN (the trunk carries it
+  untagged), with the same editable-suggestion fallback
+- [x] 216 pytest / 38 vitest / 4 e2e green
+
+**Demo:** at STO, ACCESS_VLAN and NATIVE_VLAN_ID now prefill 299 and
+CRITICAL_VLAN_ID 1010, all read-only from NetBox.
+
+**Not a tool bug:** the remaining `NCTP10214 … Unable to push the invalid CLI`
+is IOS answering the C3PL/new-style-AAA conversion prompt interactively
+(`Do you wish to continue? [yes]:`). CCC cannot answer prompts from a plain CLI
+template — that is template/device-side, and the tool now reports it verbatim.
