@@ -36,7 +36,7 @@ interface JobDevice {
   > | null
   dayn_variables: Record<
     string,
-    { value: string | null; source: 'mapped' | 'manual' | 'secret' }
+    { value: string | null; source: 'netbox' | 'mapped' | 'manual' | 'secret' }
   > | null
 }
 
