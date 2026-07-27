@@ -71,9 +71,11 @@ test("complete wizard run: claim, resume after reload, Day-N manual entry, final
   await expect(
     page.getByText("Fill in all manual variables first."),
   ).toBeVisible();
-  for (const input of await page.getByLabel(/CONTACT \(manual\)/i).all()) {
+  for (const input of await page.getByLabel(/^CONTACT for /i).all()) {
     await input.fill("noc@example.com");
   }
+  // private-VLAN config is optional: left blank it must not block the deploy
+  await expect(page.getByText(/PVLAN \(optional\)/i).first()).toBeVisible();
   await page
     .getByRole("button", { name: "Deploy Day-N (2 device(s))" })
     .click();

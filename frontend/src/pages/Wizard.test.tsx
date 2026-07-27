@@ -241,6 +241,7 @@ describe('Wizard', () => {
           dayn_variables: {
             SNMP_LOCATION: { value: 'Rack 1', source: 'mapped' },
             CONTACT: { value: null, source: 'manual' },
+            PVLAN: { value: null, source: 'manual', optional: true },
           },
         },
         finishedJob.devices[1],
@@ -277,8 +278,12 @@ describe('Wizard', () => {
     const deployButton = screen.getByRole('button', { name: /Deploy Day-N/ })
     expect(deployButton).toBeDisabled()
 
-    await userEvent.type(screen.getByLabelText(/CONTACT \(manual\)/i), 'noc@example.com')
-    expect(deployButton).toBeEnabled()
+    // the optional private-VLAN field is present but never gates the deploy
+    expect(screen.getByText(/PVLAN \(optional\)/i)).toBeInTheDocument()
+    expect(screen.getByLabelText('PVLAN for FCW1234ABCD')).not.toBeRequired()
+
+    await userEvent.type(screen.getByLabelText('CONTACT for FCW1234ABCD'), 'noc@example.com')
+    expect(deployButton).toBeEnabled() // still enabled with PVLAN left blank
     await userEvent.click(deployButton)
 
     const deployCall = fetchMock.mock.calls.find(([url]) =>

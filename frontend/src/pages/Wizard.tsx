@@ -36,7 +36,11 @@ interface JobDevice {
   > | null
   dayn_variables: Record<
     string,
-    { value: string | null; source: 'netbox' | 'mapped' | 'manual' | 'secret' }
+    {
+      value: string | null
+      source: 'netbox' | 'mapped' | 'manual' | 'secret'
+      optional?: boolean
+    }
   > | null
 }
 
@@ -879,10 +883,13 @@ function DayNView({ job: initialJob }: { job: Job }) {
       [deviceId]: { ...(prev[deviceId] ?? {}), [variable]: value },
     }))
 
+  // optional fields (private-VLAN config) may stay blank and never gate deploy
   const manualComplete = eligible.every((device) =>
     Object.entries(device.dayn_variables ?? {}).every(
       ([variable, info]) =>
-        info.source !== 'manual' || (manual[device.id]?.[variable] ?? '').trim() !== '',
+        info.source !== 'manual' ||
+        info.optional ||
+        (manual[device.id]?.[variable] ?? '').trim() !== '',
     ),
   )
 
@@ -984,13 +991,24 @@ function DayNView({ job: initialJob }: { job: Job }) {
                 {Object.entries(device.dayn_variables ?? {}).map(([variable, info]) =>
                   info.source === 'manual' ? (
                     <label key={variable} className="block">
-                      <span className="text-xs text-amber-600 uppercase dark:text-amber-400">
-                        {variable} (manual)
+                      <span
+                        className={
+                          info.optional
+                            ? 'text-xs text-slate-500 uppercase dark:text-slate-400'
+                            : 'text-xs text-amber-600 uppercase dark:text-amber-400'
+                        }
+                      >
+                        {variable} {info.optional ? '(optional)' : '(manual)'}
                       </span>
                       <input
                         type="text"
-                        required
-                        className="mt-1 block w-full rounded-md border border-amber-300 bg-white px-2 py-1.5 text-sm dark:border-amber-700 dark:bg-slate-900"
+                        required={!info.optional}
+                        aria-label={`${variable} for ${device.serial}`}
+                        className={
+                          info.optional
+                            ? 'mt-1 block w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900'
+                            : 'mt-1 block w-full rounded-md border border-amber-300 bg-white px-2 py-1.5 text-sm dark:border-amber-700 dark:bg-slate-900'
+                        }
                         value={manual[device.id]?.[variable] ?? ''}
                         onChange={(e) => setManualValue(device.id, variable, e.target.value)}
                       />

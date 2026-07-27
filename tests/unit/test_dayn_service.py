@@ -51,6 +51,7 @@ def _mock_prepare(respx_mock: respx.MockRouter) -> None:
             "templateParams": [
                 {"parameterName": "SNMP_LOCATION", "required": True},
                 {"parameterName": "CONTACT", "required": True},
+                {"parameterName": "PVLAN"},  # private-VLAN config: optional
             ],
         },
     )
@@ -122,7 +123,18 @@ def test_deploy_rejects_missing_manual_values(client: TestClient) -> None:
         f"/api/wizard/jobs/{job_id}/dayn/deploy", json={"template_id": "tmpl-N", "manual": {}}
     )
     assert response.status_code == 422
-    assert "CONTACT" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert "CONTACT" in detail
+    assert "PVLAN" not in detail  # optional: a blank PVLAN never blocks a deploy
+
+
+def test_prepare_marks_private_vlan_optional(client: TestClient) -> None:
+    job_id = _run_day0(client)
+    _store_dayn_mapping(client)
+    job = _prepare(client, job_id)
+    variables = job["devices"][0]["dayn_variables"]
+    assert variables["PVLAN"]["optional"] is True
+    assert "optional" not in variables["CONTACT"]
 
 
 def _manual_for_all(client: TestClient, job_id: int) -> dict[str, dict[str, str]]:
@@ -171,6 +183,8 @@ def test_full_dayn_success_activates_netbox(client: TestClient) -> None:
     body = deploy.calls[0].request.content.decode()
     assert "noc@example.com" in body
     assert "Rack" in body
+    # the blank optional PVLAN is omitted so the template's own default applies
+    assert "PVLAN" not in body
 
 
 def test_task_error_with_empty_reason_drills_task_tree(client: TestClient) -> None:

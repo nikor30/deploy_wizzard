@@ -132,3 +132,17 @@ def test_alias_missing_in_netbox_falls_back_to_manual() -> None:
     device = {k: v for k, v in STO_DEVICE.items() if k != "asset_tag"}
     resolved = resolve_variables(["ASSET_ID"], {}, {"device": device})
     assert resolved["ASSET_ID"] == {"value": None, "source": "manual"}
+
+
+def test_private_vlan_variables_are_optional() -> None:
+    """PVLAN config only applies to switches that use private VLANs, so it must
+    never gate a deploy."""
+    variables = ["PVLAN", "PRIMARYVLAN", "SECONDARYVLAN"]
+    resolved = resolve_variables(variables, {}, {"device": STO_DEVICE})
+    for name in variables:
+        assert resolved[name] == {"value": None, "source": "manual", "optional": True}
+
+
+def test_other_manual_variables_stay_required() -> None:
+    resolved = resolve_variables(["PO_ID", "NATIVE_VLAN_ID"], {}, {"device": STO_DEVICE})
+    assert all("optional" not in info for info in resolved.values())

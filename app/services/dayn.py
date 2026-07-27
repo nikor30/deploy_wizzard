@@ -72,8 +72,29 @@ DAYN_ALIASES: dict[str, str] = {
 }
 
 
+# Variables the operator may leave blank. Private-VLAN config only applies to
+# switches that actually use PVLANs, so requiring it would block every ordinary
+# deploy. A blank optional variable is simply omitted from the deploy payload —
+# the template's own default applies.
+OPTIONAL_VARS: frozenset[str] = frozenset(
+    {
+        "PVLAN",
+        "PRIVATEVLAN",
+        "PRIMARYVLAN",
+        "SECONDARYVLAN",
+        "PVLANPRIMARY",
+        "PVLANSECONDARY",
+    }
+)
+
+
 def normalize_var(name: str) -> str:
     return "".join(c for c in name.upper() if c.isalnum())
+
+
+def is_optional_var(name: str) -> bool:
+    """True for variables the wizard must not require (private-VLAN config)."""
+    return normalize_var(name) in OPTIONAL_VARS
 
 
 def is_internal_var(name: str) -> bool:
@@ -133,6 +154,14 @@ def resolve_path(context: dict[str, Any], path: str) -> str | None:
     return str(current)
 
 
+def _manual(variable: str) -> dict[str, Any]:
+    """An open field; optional ones never block the deploy button."""
+    info: dict[str, Any] = {"value": None, "source": MANUAL}
+    if is_optional_var(variable):
+        info["optional"] = True
+    return info
+
+
 def resolve_variables(
     variables: list[str],
     mappings: dict[str, str],
@@ -164,7 +193,7 @@ def resolve_variables(
             if name in known_secrets:
                 result[variable] = {"value": SECRET_MASK, "source": SECRET, "secret": name}
             else:
-                result[variable] = {"value": None, "source": MANUAL}
+                result[variable] = _manual(variable)
             continue
         value = resolve_path(context, path) if path else None
         if value is not None:
@@ -181,7 +210,7 @@ def resolve_variables(
         if norm in by_norm:
             result[variable] = {"value": SECRET_MASK, "source": SECRET, "secret": by_norm[norm]}
         else:
-            result[variable] = {"value": None, "source": MANUAL}
+            result[variable] = _manual(variable)
     return result
 
 

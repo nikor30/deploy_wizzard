@@ -749,3 +749,20 @@ template nearly every field came up as a required manual entry.
 BUILDING_ROOM, DEVICE_ROLE, ASSET_ID, RACK_ID, RACK_POSITION, SUPPORT_CONTACT,
 UPLINK_SWITCH, UPLINK_PORTS and ARRVLANS from NetBox; only the genuine design
 choices remain open, and the junk/binding variables are gone.
+
+## Day-N: private-VLAN config is optional (v1.9.1) ✅
+
+`PVLAN`/`PRIMARYVLAN`/`SECONDARYVLAN` were required like any other manual
+variable, so the Deploy button stayed disabled on every switch that does not
+use private VLANs.
+
+- [x] `OPTIONAL_VARS` + `is_optional_var()`; resolved manual entries carry
+  `optional: true` (via the new `_manual()` helper)
+- [x] Deploy endpoint no longer counts a blank optional variable as missing and
+  omits it from the payload, so the template's own default applies
+- [x] UI renders optional fields un-highlighted, labelled `(optional)`, and
+  `manualComplete` ignores them; inputs gained a per-device `aria-label`
+- [x] 190 pytest / 38 vitest / 4 e2e green
+
+**Demo:** with PVLAN left blank the Deploy button is enabled, the deploy payload
+contains no PVLAN key, and CONTACT is still required.

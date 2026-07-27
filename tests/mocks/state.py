@@ -15,7 +15,8 @@ NETBOX_SITE_NAME = "FFM-DC1"
 
 DAY0_TEMPLATE_ID = "tpl-day0"
 DAYN_TEMPLATE_ID = "tpl-dayn"
-DAYN_VARIABLES = ["SNMP_LOCATION", "NTP_SERVER", "CONTACT"]
+# PVLAN is private-VLAN config: optional, must never gate the deploy button
+DAYN_VARIABLES = ["SNMP_LOCATION", "NTP_SERVER", "CONTACT", "PVLAN"]
 
 
 @dataclass
