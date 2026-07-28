@@ -351,6 +351,58 @@ class CatalystCenterClient:
         body = response.json()
         return dict(body.get("response", body))
 
+    # --- inventory metadata: device role + tags ---------------------------
+    #
+    # NOTE: these four endpoints are the documented 2.3.7 Intent API shapes but
+    # have not yet been confirmed against the user's live controller. Every
+    # caller treats a failure here as non-fatal — inventory metadata is
+    # cosmetic, and a 4xx must never fail an otherwise good onboarding.
+
+    async def get_network_device_by_ip(self, ip: str) -> dict[str, Any]:
+        """Inventory device (post-claim) by management IP — gives the UUID the
+        role and tag endpoints need."""
+        response = await self._get(f"/dna/intent/api/v1/network-device/ip-address/{ip}")
+        body = response.json()
+        return dict(body.get("response", body))
+
+    async def set_device_role(self, device_uuid: str, role: str) -> None:
+        """Set the inventory role (ACCESS/CORE/DISTRIBUTION/BORDER ROUTER).
+
+        `roleSource: MANUAL` stops CCC's discovery from overwriting it on the
+        next inventory sync.
+        """
+        await self._request(
+            "PUT",
+            "/dna/intent/api/v1/network-device/brief",
+            json={"id": device_uuid, "role": role, "roleSource": "MANUAL"},
+        )
+
+    async def ensure_tag(self, name: str) -> str:
+        """Tag id for `name`, creating the tag if it does not exist yet."""
+        response = await self._get("/dna/intent/api/v1/tag", params={"name": name})
+        existing = response.json().get("response") or []
+        for tag in existing:
+            if str(tag.get("name", "")).casefold() == name.casefold() and tag.get("id"):
+                return str(tag["id"])
+        created = await self._request("POST", "/dna/intent/api/v1/tag", json={"name": name})
+        body = created.json().get("response") or {}
+        tag_id = body.get("id")
+        if not tag_id:
+            # CCC answers tag creation with a task; re-read to get the id.
+            response = await self._get("/dna/intent/api/v1/tag", params={"name": name})
+            for tag in response.json().get("response") or []:
+                if tag.get("id"):
+                    return str(tag["id"])
+            raise CatalystError(f"Catalyst Center did not return an id for tag {name!r}.")
+        return str(tag_id)
+
+    async def tag_device(self, tag_id: str, device_uuid: str) -> None:
+        await self._request(
+            "POST",
+            f"/dna/intent/api/v1/tag/{tag_id}/member",
+            json={"networkdevice": [device_uuid]},
+        )
+
     async def get_task(self, task_id: str) -> dict[str, Any]:
         response = await self._get(f"/dna/intent/api/v1/task/{task_id}")
         body = response.json()

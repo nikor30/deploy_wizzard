@@ -931,3 +931,34 @@ rejected in EXEC).
 - [x] `INTERACTIVE_HINT` rewritten + test asserts the control-class sequence
 - [x] Corrected `IT_DayN_Port_Template` shared with the user
 - [x] 223 pytest / 39 vitest / 4 e2e green
+
+## Day-N false success + CCC inventory role/tag (v1.12.0) ✅
+
+**A deployment CCC called SUCCESS had reached nothing.** `poll_deployment`
+trusted the top-level `status` only. That field describes the deployment
+*request*; the per-target result lives in `devices[]`, where a target can sit at
+`NOT_APPLICABLE`/`SKIPPED` while the overall status reads SUCCESS. The wizard
+then reported success and patched NetBox to `active` for a switch that never
+received a line of config — §11's half-updated source of truth.
+
+Now every entry in `devices[]` must also be in a success state; anything else
+raises with that device's `status` + `detailedStatusMessage`, and NetBox is left
+untouched. A SUCCESS with an empty `devices[]` is logged as a warning.
+
+**Role and tag are mirrored into CCC inventory.** After a successful claim the
+role shown in wizard step 3 (`switchType`, from the NetBox device role) is
+mapped onto CCC's fixed role enum (`ACCESS`/`DISTRIBUTION`/`CORE`/
+`BORDER ROUTER`) and set via `network-device/brief` with `roleSource: MANUAL`,
+and the raw NetBox role name is created as a tag and attached to the device.
+Best effort throughout: the switch is already onboarded when this runs, so any
+failure is logged and surfaced in Logs but never fails Day-0.
+
+- [x] `poll_deployment` checks device-level status + regression test
+- [x] `get_network_device_by_ip` / `set_device_role` / `ensure_tag` / `tag_device`
+- [x] `ccc_role` / `device_role_name` + non-fatal-failure test
+- [x] 227 pytest / 39 vitest / 4 e2e green
+
+**Open:** the four inventory endpoints above are the documented 2.3.7 shapes but
+are not yet confirmed against the live controller — hence the non-fatal
+handling. AAA/TACACS/RADIUS from network profiles is **not** applied by
+site-claim or template deploy; that needs a Provision step, still to be designed.

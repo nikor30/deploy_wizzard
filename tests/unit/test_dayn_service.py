@@ -377,6 +377,42 @@ def test_deployment_failure_surfaces_the_device_level_reason(client: TestClient)
     assert "Invalid input detected at Vlan900" in job["devices"][0]["error"]
 
 
+def test_overall_success_with_a_failed_device_is_not_a_success(client: TestClient) -> None:
+    """CCC reports the *deployment* SUCCESS while the single target was skipped
+    or failed. Trusting the top-level status marks NetBox active for a switch
+    that never received the config (§11: a half-updated source of truth)."""
+    job_id = _run_day0(client)
+    _store_dayn_mapping(client)
+    _prepare(client, job_id)
+    status_url = (
+        f"{CCC}/dna/intent/api/v1/template-programmer/template/deploy/status/"
+        "cf46d06a-a007-4275-b73b-519953693f29"
+    )
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="testserver").pass_through()
+        _mock_ccc(respx_mock)
+        _mock_template(respx_mock)
+        respx_mock.post(DEPLOY_URL).respond(200, json={"deploymentId": DEPLOY_SENTENCE})
+        respx_mock.get(status_url).respond(
+            200,
+            json={
+                "status": "SUCCESS",
+                "devices": [
+                    {
+                        "status": "NOT_APPLICABLE",
+                        "detailedStatusMessage": "Template not applicable to device",
+                    }
+                ],
+            },
+        )
+        _deploy(client, job_id, respx_mock)
+
+    job = client.get(f"/api/wizard/jobs/{job_id}").json()
+    assert all(d["state"] == "dayn_failed" for d in job["devices"])
+    assert "NOT_APPLICABLE" in job["devices"][0]["error"]
+    assert "Template not applicable to device" in job["devices"][0]["error"]
+
+
 def test_interactive_prompt_failure_gets_an_actionable_hint() -> None:
     """CCC only auto-answers the prompts it knows; a bare "Do you wish to
     continue? [yes]:" makes it reject the whole push as invalid CLI."""
