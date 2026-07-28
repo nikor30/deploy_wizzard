@@ -33,7 +33,7 @@ test("wizard and navigation are usable on a phone viewport", async ({
   await expect(page.getByLabel("Select SN000001")).toBeVisible();
 
   // main navigation reaches settings + stats + logs
-  for (const target of ["Statistics", "Logs", "Credentials", "Site Mapping"]) {
+  for (const target of ["Statistics", "Logs", "Settings", "Site Mapping"]) {
     await expect(page.getByRole("link", { name: target })).toBeVisible();
   }
 });

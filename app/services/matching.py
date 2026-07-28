@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.clients.netbox import NetBoxClient
+from app.errors import PnPBridgeError
 
 logger = logging.getLogger(__name__)
 
@@ -172,3 +173,35 @@ def preselect_mgmt_vlan(vlan_options: list[dict[str, Any]]) -> int | None:
         if len(hits) == 1:
             return int(hits[0])
     return None
+
+
+# An IP inside the VLAN's prefix whose name marks it as the router/gateway.
+GATEWAY_KEYWORDS = ("gateway", "gw")
+
+
+async def resolve_vlan_gateway(client: NetBoxClient, vlan_id: int) -> str | None:
+    """The gateway address documented in NetBox for a VLAN.
+
+    NetBox models it as an ordinary IP inside the VLAN's prefix, named (DNS
+    name) or described "gateway". That beats guessing the first host of the
+    subnet, which is only a convention. Resolved lazily for the VLAN the
+    operator actually picked — a site can carry dozens of VLANs.
+
+    Only a single hit is used: two addresses both claiming to be the gateway is
+    ambiguous, and a wrong default gateway strands the device.
+    """
+    try:
+        addresses = await client.get_vlan_ip_addresses(vlan_id)
+    except PnPBridgeError:
+        logger.warning("Could not read VLAN %s addresses for the gateway", vlan_id)
+        return None
+    hits: list[str] = []
+    for entry in addresses:
+        address = entry.get("address")
+        if not address:
+            continue
+        haystack = f"{entry.get('dns_name') or ''} {entry.get('description') or ''}".lower()
+        if any(keyword in haystack for keyword in GATEWAY_KEYWORDS):
+            hits.append(str(address).split("/")[0])
+    unique = sorted(set(hits))
+    return unique[0] if len(unique) == 1 else None

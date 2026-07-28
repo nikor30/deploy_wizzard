@@ -11,7 +11,7 @@ describe('App shell', () => {
       </MemoryRouter>,
     )
     expect(screen.getByText('PnP Bridge')).toBeInTheDocument()
-    for (const label of ['Wizard', 'Statistics', 'Logs', 'Credentials', 'Site Mapping']) {
+    for (const label of ['Wizard', 'Statistics', 'Logs', 'Settings', 'Site Mapping']) {
       expect(screen.getByRole('link', { name: label })).toBeInTheDocument()
     }
     expect(screen.getByRole('heading', { name: 'Onboarding Wizard' })).toBeInTheDocument()

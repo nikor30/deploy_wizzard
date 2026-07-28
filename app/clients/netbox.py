@@ -137,6 +137,24 @@ class NetBoxClient:
     async def get_ip_addresses(self, device_id: int) -> list[dict[str, Any]]:
         return await self._get_paginated("/api/ipam/ip-addresses/", params={"device_id": device_id})
 
+    async def get_vlan_ip_addresses(self, vlan_id: int) -> list[dict[str, Any]]:
+        """Every IP in the prefixes scoped to a VLAN.
+
+        NetBox has no direct VLAN→IP filter: IPs belong to a prefix, and the
+        prefix carries the VLAN. So resolve the VLAN's prefixes first, then the
+        IPs inside each. Used to find the VLAN's gateway address by name.
+        """
+        prefixes = await self._get_paginated("/api/ipam/prefixes/", params={"vlan_id": vlan_id})
+        addresses: list[dict[str, Any]] = []
+        for prefix in prefixes:
+            value = prefix.get("prefix")
+            if not value:
+                continue
+            addresses.extend(
+                await self._get_paginated("/api/ipam/ip-addresses/", params={"parent": value})
+            )
+        return addresses
+
     async def patch_device_status(self, device_id: int, status: str) -> dict[str, Any]:
         try:
             response = await self._client.patch(

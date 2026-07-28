@@ -884,3 +884,20 @@ so the fix is template-side — but the raw error gave the operator nothing.
 on a switch still in legacy auth mode triggers the irreversible legacy→new-style
 C3PL conversion, which prompts `Do you wish to continue? [yes]:`. CCC only
 answers `[y/n]`, `[confirm]` and `ACCEPT?`.
+
+## Webhook TLS toggle, Settings rename, NetBox gateway (v1.11.0) ✅
+
+- [x] ISE webhook gained the "Verify TLS certificate" toggle the other services
+  already had (the backend already stored and honoured `tls_verify` — only the
+  UI switch was missing), fixing `CERTIFICATE_VERIFY_FAILED` deliveries
+- [x] Sidebar "Credentials" → "Settings" (route unchanged)
+- [x] `NetBoxClient.get_vlan_ip_addresses()` — VLAN → prefixes → IPs (NetBox has
+  no direct VLAN→IP filter); `resolve_vlan_gateway()` picks the address whose
+  dns_name/description says gateway, single match only
+- [x] `prepare_day0` resolves it lazily for the picked VLAN (cached per VLAN)
+  and passes it to `day0_builtins`, overriding the first-host guess; the field
+  stays editable either way
+- [x] 223 pytest / 39 vitest / 4 e2e green
+
+**Demo:** with VLAN 510 selected, DEFAULT_GATEWAY prefills 172.20.10.1 from the
+NetBox IP named "gateway" rather than from the subnet convention.

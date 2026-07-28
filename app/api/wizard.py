@@ -28,6 +28,7 @@ from app.services.matching import (
     SiteMappingLookup,
     match_serials,
     preselect_mgmt_vlan,
+    resolve_vlan_gateway,
 )
 from app.services.settings_store import (
     filter_templates,
@@ -148,6 +149,20 @@ def _pnp_source_ip(info: dict[str, Any]) -> str | None:
             value = interface.get("ipv4Address")
             if isinstance(value, str) and value:
                 return value
+    return None
+
+
+def _mgmt_vlan_pk(device: JobDevice) -> int | None:
+    """NetBox primary key of the picked mgmt VLAN.
+
+    `mgmt_vlan` stores the VID (what the operator sees); the IPAM lookups need
+    the record id, which the match step kept in `vlan_options`.
+    """
+    if device.mgmt_vlan is None:
+        return None
+    for option in device.vlan_options or []:
+        if option.get("vid") == device.mgmt_vlan and option.get("id") is not None:
+            return int(option["id"])
     return None
 
 
@@ -309,13 +324,22 @@ async def prepare_day0(job_id: int, payload: Day0PrepareRequest, db: DbSession) 
     mappings = {m.variable: m.source_path for m in db.scalars(select(DayNMapping)).all()}
     secret_names = set(db.scalars(select(TemplateSecret.name)).all())
     async with get_netbox_client(db) as netbox:
+        gateway_cache: dict[int, str | None] = {}
         for device in matched:
             context: dict[str, Any] = {"device": {}}
             if device.netbox_device_id is not None:
                 netbox_device = await netbox.get_device(device.netbox_device_id)
                 context = await load_device_context(netbox, netbox_device)
+            # the gateway NetBox documents for the picked mgmt VLAN, resolved
+            # lazily (a site can carry dozens of VLANs) and cached per VLAN
+            gateway = None
+            vlan_pk = _mgmt_vlan_pk(device)
+            if vlan_pk is not None:
+                if vlan_pk not in gateway_cache:
+                    gateway_cache[vlan_pk] = await resolve_vlan_gateway(netbox, vlan_pk)
+                gateway = gateway_cache[vlan_pk]
             device.day0_variables = resolve_day0_variables(
-                variables, device, context, mappings, secret_names
+                variables, device, context, mappings, secret_names, gateway
             )
     job.day0_config_id = payload.config_id
     db.flush()

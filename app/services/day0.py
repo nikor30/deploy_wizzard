@@ -97,10 +97,14 @@ def _normalize_var(name: str) -> str:
     return "".join(c for c in name.upper() if c.isalnum())
 
 
-def day0_builtins(device: JobDevice) -> dict[str, str]:
+def day0_builtins(device: JobDevice, gateway: str | None = None) -> dict[str, str]:
     """The standard onboarding values derived from the NetBox match: hostname,
-    mgmt IP/mask/prefix/subnet, mgmt VLAN + its name, and a best-effort gateway
-    guess (first host of the mgmt subnet — the operator confirms/overrides it)."""
+    mgmt IP/mask/prefix/subnet, mgmt VLAN + its name, and the default gateway.
+
+    `gateway` is the address NetBox documents for the mgmt VLAN (see
+    `resolve_vlan_gateway`). Without one we fall back to the first host of the
+    mgmt subnet — a convention, not a fact — so the field stays editable either
+    way and the operator confirms it."""
     values: dict[str, str] = {}
     if device.netbox_name:
         values["hostname"] = device.netbox_name
@@ -114,6 +118,8 @@ def day0_builtins(device: JobDevice) -> dict[str, str]:
         first = next(iter(hosts), None)
         if first is not None:
             values["gateway"] = str(first)
+    if gateway:
+        values["gateway"] = gateway  # NetBox beats the first-host guess
     if device.mgmt_vlan is not None:
         values["mgmt_vlan"] = str(device.mgmt_vlan)
         for option in device.vlan_options or []:
@@ -129,6 +135,7 @@ def resolve_day0_variables(
     context: dict[str, Any],
     mappings: dict[str, str],
     secret_names: Iterable[str] = (),
+    gateway: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Resolve each Day-0 template variable, in order:
     garbled password-leak names are dropped entirely → built-in onboarding value
@@ -136,7 +143,7 @@ def resolve_day0_variables(
     dot-path mapping → fixed-choice picker (campusswitch yes/no) → global
     variable / secret matched by name (set once, masked) → open for manual
     entry. `gateway` is a guess and stays editable (source `manual`)."""
-    builtins = day0_builtins(device)
+    builtins = day0_builtins(device, gateway)
     secrets_by_norm = {_normalize_var(name): name for name in secret_names}
     result: dict[str, dict[str, Any]] = {}
     for variable in variables:
