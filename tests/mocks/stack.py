@@ -27,6 +27,7 @@ _KNOBS = {
     "fail_next_ccc_gets",
     "fail_onboarding_serials",
     "dayn_task_fail",
+    "provision_fail",
     "netbox_patch_fail",
     "ise_fail",
     "claim_polls",
@@ -68,6 +69,9 @@ def create_stack() -> FastAPI:
         return {
             "claims": STATE.claims,
             "deliveries": STATE.deliveries,
+            "provisioned": STATE.provisioned,
+            "device_roles": STATE.device_roles,
+            "device_tags": STATE.device_tags,
             "netbox_statuses": {
                 str(device_id): device["status"]["value"]
                 for device_id, device in STATE.netbox_devices.items()

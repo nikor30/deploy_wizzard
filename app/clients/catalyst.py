@@ -138,7 +138,7 @@ class CatalystCenterClient:
         path: str,
         token: str,
         params: dict[str, Any] | None,
-        json: dict[str, Any] | None,
+        json: dict[str, Any] | list[dict[str, Any]] | None,
     ) -> httpx.Response:
         headers = {"X-Auth-Token": token}
         async with self._semaphore:
@@ -158,7 +158,7 @@ class CatalystCenterClient:
         path: str,
         *,
         params: dict[str, Any] | None = None,
-        json: dict[str, Any] | None = None,
+        json: dict[str, Any] | list[dict[str, Any]] | None = None,
     ) -> httpx.Response:
         """Authenticated request with 401-refresh-retry exactly once."""
         token = await self._get_token()
@@ -402,6 +402,28 @@ class CatalystCenterClient:
             f"/dna/intent/api/v1/tag/{tag_id}/member",
             json={"networkdevice": [device_uuid]},
         )
+
+    async def provision_devices(self, site_id: str, device_uuid: str) -> dict[str, Any]:
+        """Provision a device to its site so the site's network settings — AAA,
+        RADIUS/TACACS, DNS, DHCP, NTP, syslog, SNMP — are pushed to it.
+
+        PnP site-claim assigns the device to a site and runs the Day-0 template;
+        it does **not** apply network settings. Template deploy does not either.
+        Only provisioning does, which is why an otherwise green onboarding left
+        the switch without any AAA config.
+
+        `POST /dna/intent/api/v1/sda/provisionDevices` takes a list of
+        `{siteId, networkDeviceId}` and answers with a task. Despite the `sda`
+        path segment this is the general provision API in 2.3.7, not fabric-only
+        (see the Catalyst Center 2.3.7 "Provision devices" API reference).
+        Not retried — provisioning is not idempotent.
+        """
+        response = await self._request(
+            "POST",
+            "/dna/intent/api/v1/sda/provisionDevices",
+            json=[{"siteId": site_id, "networkDeviceId": device_uuid}],
+        )
+        return dict(response.json())
 
     async def get_task(self, task_id: str) -> dict[str, Any]:
         response = await self._get(f"/dna/intent/api/v1/task/{task_id}")

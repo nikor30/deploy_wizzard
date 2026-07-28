@@ -70,6 +70,13 @@ def test_full_happy_path_step1_to_step5(configured_client: TestClient, mock: htt
     assert parameters["HOSTNAME"].startswith("sw-ffm-")
     assert parameters["MGMT_IP"].startswith("172.20.10.")
 
+    # Provisioned to site: this is the step that pushes the site's network
+    # settings (AAA/RADIUS/TACACS, DNS, DHCP) — claim alone never does.
+    assert len(snapshot["provisioned"]) == len(job["devices"])
+    # role + tag mirrored into CCC inventory from the NetBox role
+    assert set(snapshot["device_roles"].values()) == {"ACCESS"}
+    assert all(tags for tags in snapshot["device_tags"].values())
+
     # ISE webhook fired per device, HMAC-signed
     assert len(snapshot["deliveries"]) == len(job["devices"])
     delivery = snapshot["deliveries"][0]
@@ -232,3 +239,35 @@ def test_dayn_preview_by_serial_resolves_netbox_derived_values(
     assert values["uplink_switch"] == "dist-ffm-01"
     assert values["arrVLANs"] == "(110,MGMT);(120,USERS)"
     assert values["support_contact"] == "Ladislav Fekete"
+
+
+def test_provision_failure_is_not_reported_as_a_successful_day0(
+    configured_client: TestClient, mock: httpx.Client
+) -> None:
+    """Without provisioning the switch has no AAA/RADIUS/DNS/DHCP from its
+    site. Calling that a success is what let the gap go unnoticed."""
+    client = configured_client
+    mock.post("/__mock__/config", json={"provision_fail": True})
+    job = _create_matched_job(client)
+    client.post(f"/api/wizard/jobs/{job['id']}/claim", json={"config_id": "tpl-day0", **FAST})
+
+    job = client.get(f"/api/wizard/jobs/{job['id']}").json()
+    assert all(d["state"] == "failed" for d in job["devices"])
+    error = job["devices"][0]["error"]
+    assert "claim succeeded" in error.lower()
+    assert "AAA/RADIUS/DNS/DHCP" in error
+
+
+def test_provisioning_can_be_turned_off(configured_client: TestClient, mock: httpx.Client) -> None:
+    """Escape hatch for controllers that do not expose the provision API."""
+    client = configured_client
+    mock.post("/__mock__/config", json={"provision_fail": True})
+    flags = client.get("/api/settings/flags").json()
+    client.put("/api/settings/flags", json={**flags, "provision_after_claim": False})
+
+    job = _create_matched_job(client)
+    client.post(f"/api/wizard/jobs/{job['id']}/claim", json={"config_id": "tpl-day0", **FAST})
+
+    job = client.get(f"/api/wizard/jobs/{job['id']}").json()
+    assert all(d["state"] == "success" for d in job["devices"])
+    assert mock.get("/__mock__/state").json()["provisioned"] == []

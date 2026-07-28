@@ -470,6 +470,7 @@ async def poll_task(
     *,
     poll_interval: float = POLL_INTERVAL_SECONDS,
     task_timeout: float = TASK_TIMEOUT_SECONDS,
+    label: str = "Day-N",
 ) -> None:
     """Poll a CCC task until it ends; raise with the real reason on failure."""
     deadline = asyncio.get_event_loop().time() + task_timeout
@@ -482,11 +483,11 @@ async def poll_task(
                 children = await client.get_task_tree(task_id)
                 reasons = [str(c["failureReason"]) for c in children if c.get("failureReason")]
                 reason = "; ".join(reasons) or "no failureReason from CCC"
-            raise PnPBridgeError(f"Day-N task failed: {reason}")
+            raise PnPBridgeError(f"{label} task failed: {reason}")
         if task.get("endTime"):
             return
         if asyncio.get_event_loop().time() >= deadline:
-            raise TaskTimeout(f"Day-N task {task_id} did not finish within {int(task_timeout)}s.")
+            raise TaskTimeout(f"{label} task {task_id} did not finish within {int(task_timeout)}s.")
         await asyncio.sleep(poll_interval)
 
 

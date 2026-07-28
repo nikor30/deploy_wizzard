@@ -271,6 +271,7 @@ async def match_job(job_id: int, db: DbSession) -> JobOut:
         device.netbox_name = result.netbox_name
         device.netbox_site_id = result.netbox_site_id
         device.netbox_site_name = result.netbox_site_name
+        device.netbox_role = result.netbox_role
         device.ccc_site_id = result.ccc_site_id
         device.ccc_site_name = result.ccc_site_name
         device.mgmt_ip = result.mgmt_ip
