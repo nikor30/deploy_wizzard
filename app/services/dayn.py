@@ -591,6 +591,35 @@ async def poll_deployment(
                 f"{interactive_prompt_hint(reason)}"
             )
         if status in DEPLOYMENT_SUCCEEDED:
+            # The overall status is about the *deployment request*, not about
+            # what reached the switch: CCC happily reports SUCCESS while the
+            # only target sits at NOT_APPLICABLE/SKIPPED and never received a
+            # line of config. Marking NetBox active on that is exactly the
+            # half-updated source of truth §11 warns about, so every target
+            # must have succeeded too.
+            not_ok = [
+                device
+                for device in status_body.get("devices") or []
+                if str(device.get("status") or "").upper() not in DEPLOYMENT_SUCCEEDED
+            ]
+            if not_ok:
+                details = "; ".join(
+                    f"{str(device.get('status') or 'UNKNOWN').upper()}: "
+                    f"{str(device.get('detailedStatusMessage') or '').strip() or 'no detail'}"
+                    for device in not_ok
+                )
+                raise PnPBridgeError(
+                    f"Catalyst Center reported the deployment as {status}, but the target device "
+                    f"did not apply the template ({details}). Nothing was pushed to the switch, "
+                    "so NetBox was left untouched."
+                )
+            if not status_body.get("devices"):
+                logger.warning(
+                    "Deployment %s reported %s but listed no target devices — "
+                    "Catalyst Center may not have pushed anything.",
+                    deployment_id,
+                    status,
+                )
             return
         if asyncio.get_event_loop().time() > deadline:
             raise TaskTimeout(

@@ -176,3 +176,56 @@ async def test_webhook_failure_does_not_roll_back_claim(client: TestClient) -> N
         deliveries = db.scalars(select(WebhookDelivery)).all()
         assert {d.status for d in deliveries} == {"failed"}
         assert all(d.attempts == 4 for d in deliveries)
+
+
+# --- CCC inventory metadata: role + tag --------------------------------------
+
+
+def test_ccc_role_maps_netbox_role_names_onto_the_ccc_enum() -> None:
+    """CCC only accepts a fixed role enum; NetBox role names are free text."""
+    from app.services.day0 import ccc_role
+
+    assert ccc_role("Access") == "ACCESS"
+    assert ccc_role("campus access switch") == "ACCESS"
+    assert ccc_role("Distribution") == "DISTRIBUTION"
+    assert ccc_role("Core") == "CORE"
+    assert ccc_role("Border Router") == "BORDER ROUTER"
+    # nothing recognisable -> leave the role alone rather than guess
+    assert ccc_role("Wireless AP") is None
+    assert ccc_role(None) is None
+
+
+def test_device_role_name_reads_the_wizard_selection() -> None:
+    from app.services.day0 import device_role_name
+
+    assert device_role_name({"switchType": "Access"}) == "Access"
+    assert device_role_name({"HOSTNAME": "sw-1"}) is None
+    assert device_role_name(None) is None
+
+
+async def test_inventory_role_and_tag_failure_never_fails_day0(client: TestClient) -> None:
+    """The switch is already onboarded when this runs — a 404 from the tag or
+    role endpoint must not turn a good Day-0 into a failed one."""
+    from app.clients.catalyst import CatalystCenterClient
+    from app.db.models import JobDevice
+    from app.services.day0 import _apply_inventory_metadata
+
+    with open_session() as db:
+        device = JobDevice(
+            job_id=1,
+            serial="FOC1",
+            ccc_device_id="ccc-1",
+            mgmt_ip="172.20.10.5/24",
+            day0_variables={"switchType": "Access"},
+        )
+        db.add(device)
+        db.flush()
+        device_id = device.id
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.post(f"{CCC}/dna/system/api/v1/auth/token").respond(200, json={"Token": "t"})
+        respx_mock.get(f"{CCC}/dna/intent/api/v1/network-device/ip-address/172.20.10.5").respond(
+            404, json={"message": "not found"}
+        )
+        async with CatalystCenterClient(CCC, "admin", "pw") as ccc:
+            await _apply_inventory_metadata(ccc, 1, device_id)  # must not raise

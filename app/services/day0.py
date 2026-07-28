@@ -321,6 +321,83 @@ async def _notify_ise(job_id: int, device_id: int) -> None:
         )
 
 
+# CCC inventory roles are a fixed enum; anything else is rejected. The NetBox
+# role name is free text ("Access", "access-switch", "Campus Access"), so match
+# on a keyword rather than equality.
+CCC_ROLES: tuple[tuple[str, str], ...] = (
+    ("access", "ACCESS"),
+    ("distribution", "DISTRIBUTION"),
+    ("core", "CORE"),
+    ("border", "BORDER ROUTER"),
+)
+
+# day0_variables keys that carry the switch role (see DAY0_ALIASES).
+ROLE_VARIABLES: tuple[str, ...] = ("SWITCHTYPE", "SWITCHTYP", "DEVICEROLE", "ROLE")
+
+
+def device_role_name(day0_variables: dict[str, Any] | None) -> str | None:
+    """The role the operator saw (and could edit) in wizard step 3."""
+    for key, value in (day0_variables or {}).items():
+        if _normalize_var(key) in ROLE_VARIABLES and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def ccc_role(role_name: str | None) -> str | None:
+    """NetBox role name -> Catalyst Center inventory role, or None if it maps
+    to nothing CCC accepts (better to leave the role alone than guess)."""
+    lowered = (role_name or "").casefold()
+    for keyword, role in CCC_ROLES:
+        if keyword in lowered:
+            return role
+    return None
+
+
+async def _apply_inventory_metadata(
+    client: CatalystCenterClient, job_id: int, device_id: int
+) -> None:
+    """Mirror the wizard's role selection into CCC inventory as role + tag.
+
+    Best effort by design: the switch is already onboarded at this point, so a
+    failure here is logged and surfaced in the Logs page but never turns a good
+    Day-0 into a failed one.
+    """
+    with open_session() as db:
+        device = db.get(JobDevice, device_id)
+        if device is None or not device.mgmt_ip:
+            return
+        serial = device.serial
+        ip = device.mgmt_ip.split("/")[0]
+        role_name = device_role_name(device.day0_variables)
+
+    if not role_name:
+        return
+    role = ccc_role(role_name)
+    try:
+        inventory = await client.get_network_device_by_ip(ip)
+        uuid = str(inventory.get("id") or "")
+        if not uuid:
+            logger.warning(
+                "Device not in CCC inventory yet — role/tag not set",
+                extra={"job_id": job_id, "serial": serial},
+            )
+            return
+        if role:
+            await client.set_device_role(uuid, role)
+        tag_id = await client.ensure_tag(role_name)
+        await client.tag_device(tag_id, uuid)
+        logger.info(
+            "Applied CCC inventory role and tag",
+            extra={"job_id": job_id, "serial": serial, "role": role, "tag": role_name},
+        )
+    except Exception as exc:  # non-fatal: onboarding already succeeded
+        logger.warning(
+            "Could not set CCC inventory role/tag (Day-0 itself succeeded): %s",
+            exc,
+            extra={"job_id": job_id, "serial": serial},
+        )
+
+
 async def _claim_one(
     client: CatalystCenterClient,
     job_id: int,
@@ -364,6 +441,7 @@ async def _claim_one(
         return
 
     _set_device_state(device_id, "success")
+    await _apply_inventory_metadata(client, job_id, device_id)
     await _notify_ise(job_id, device_id)
 
 
