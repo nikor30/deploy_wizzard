@@ -31,6 +31,7 @@ from app.services.matching import (
     resolve_vlan_gateway,
 )
 from app.services.settings_store import (
+    access_port_source,
     filter_templates,
     get_secret_box,
     pnp_states,
@@ -474,12 +475,13 @@ async def prepare_dayn(job_id: int, payload: DayNPrepareRequest, db: DbSession) 
 
     mappings = {m.variable: m.source_path for m in db.scalars(select(DayNMapping)).all()}
     secret_names = set(db.scalars(select(TemplateSecret.name)).all())
+    access_ports_from = access_port_source(db)
     async with get_netbox_client(db) as netbox:
         for device in devices:
             context: dict[str, Any] = {"device": {}}
             if device.netbox_device_id is not None:
                 netbox_device = await netbox.get_device(device.netbox_device_id)
-                context = await load_device_context(netbox, netbox_device)
+                context = await load_device_context(netbox, netbox_device, access_ports_from)
             device.dayn_variables = resolve_variables(
                 variables, mappings, context, secret_names=secret_names
             )

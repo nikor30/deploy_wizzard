@@ -427,7 +427,17 @@ async def _safe(coro: Any, what: str) -> list[dict[str, Any]]:
         return []
 
 
-async def load_device_context(netbox: NetBoxClient, device: dict[str, Any]) -> dict[str, Any]:
+# Where the access-port list comes from. "netbox" resolves ACCESSPORTS from the
+# NetBox interface data (physical, non-management, not cabled to another
+# device). "device" leaves it empty so the template falls back to its own
+# `$__interface` loop — the escape hatch for when Catalyst Center gains a native
+# way to apply port config, or when NetBox cabling is not maintained.
+ACCESS_PORT_SOURCES: tuple[str, ...] = ("netbox", "device")
+
+
+async def load_device_context(
+    netbox: NetBoxClient, device: dict[str, Any], access_port_source: str = "netbox"
+) -> dict[str, Any]:
     """Fetch the extra NetBox data a device's Day-N variables need — interfaces
     (uplinks), the site's VLANs, and support contacts — and build the full
     resolution context. Every piece degrades to empty on error, never raises,
@@ -451,7 +461,14 @@ async def load_device_context(netbox: NetBoxClient, device: dict[str, Any]) -> d
         contacts = await _safe(
             netbox.get_contact_assignments("dcim.device", int(device_id)), "device contacts"
         )
-    return build_device_context(device, interfaces, site_vlans, contacts)
+    context = build_device_context(device, interfaces, site_vlans, contacts)
+    if access_port_source != "netbox":
+        # blank, not absent: the template's `#if($ACCESS_PORTS != "")` picks its
+        # own loop, and the wizard shows the variable as unresolved rather than
+        # silently pushing a NetBox-derived list the operator opted out of.
+        context["device"]["access_ports"] = ""
+        context["device"]["access_port_count"] = ""
+    return context
 
 
 def _contact_role(assignment: dict[str, Any]) -> str | None:

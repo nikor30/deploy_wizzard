@@ -21,7 +21,7 @@ from app.errors import PnPBridgeError
 from app.logging_setup import set_http_trace
 from app.services import settings_store
 from app.services.connections import get_catalyst_client, get_netbox_client
-from app.services.dayn import load_device_context, resolve_variables
+from app.services.dayn import ACCESS_PORT_SOURCES, load_device_context, resolve_variables
 from app.services.settings_store import pnp_states, template_filter
 from app.services.suggest import suggest_variable_mappings
 
@@ -391,6 +391,16 @@ class AppFlags(BaseModel):
     # call can be captured from the Logs page. Bodies are redacted; volume is
     # high, so this is a troubleshooting mode and defaults to off.
     http_trace: bool = False
+    # Where the Day-N ACCESSPORTS variable comes from: the NetBox interface list
+    # (uplinks excluded) or the template's own on-device loop.
+    access_port_source: str = "netbox"
+
+    @field_validator("access_port_source")
+    @classmethod
+    def _known_source(cls, value: str) -> str:
+        if value not in ACCESS_PORT_SOURCES:
+            raise ValueError(f"access_port_source must be one of {', '.join(ACCESS_PORT_SOURCES)}")
+        return value
 
     @field_validator("pnp_states")
     @classmethod
@@ -435,6 +445,7 @@ def get_flags(db: DbSession) -> AppFlags:
         dayn_template_filter=template_filter(db, "dayn"),
         provision_after_claim=settings_store.provision_after_claim(db),
         http_trace=settings_store.http_trace(db),
+        access_port_source=settings_store.access_port_source(db),
     )
 
 
@@ -446,6 +457,7 @@ def put_flags(payload: AppFlags, db: DbSession) -> AppFlags:
     _set_setting(db, "dayn_template_filter", ",".join(payload.dayn_template_filter))
     _set_setting(db, "provision_after_claim", "true" if payload.provision_after_claim else "false")
     _set_setting(db, "http_trace", "true" if payload.http_trace else "false")
+    _set_setting(db, "access_port_source", payload.access_port_source)
     # applies immediately — no restart needed to capture the next call
     set_http_trace(payload.http_trace)
     db.flush()
