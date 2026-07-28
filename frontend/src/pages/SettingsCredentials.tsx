@@ -28,6 +28,7 @@ interface AppFlags {
   dayn_template_filter?: string[]
   provision_after_claim?: boolean
   http_trace?: boolean
+  access_port_source?: string
 }
 
 /** "onboard, webasto" -> ["onboard", "webasto"] (blanks dropped) */
@@ -179,6 +180,7 @@ export default function SettingsCredentials() {
   const [debug, setDebug] = useState(false)
   const [provision, setProvision] = useState(true)
   const [trace, setTrace] = useState(false)
+  const [portSource, setPortSource] = useState('netbox')
   const [pnpStates, setPnpStates] = useState<string[]>(DEFAULT_PNP_STATES)
   // kept as the raw comma-separated text so typing a comma isn't fought with
   const [day0Filter, setDay0Filter] = useState('')
@@ -197,6 +199,7 @@ export default function SettingsCredentials() {
         setDaynFilter((f.dayn_template_filter ?? []).join(', '))
         setProvision(f.provision_after_claim ?? true)
         setTrace(f.http_trace ?? false)
+        setPortSource(f.access_port_source ?? 'netbox')
       })
       .catch(() => setDebug(false))
   }, [])
@@ -212,6 +215,7 @@ export default function SettingsCredentials() {
         dayn_template_filter: toWords(daynFilter),
         provision_after_claim: provision,
         http_trace: trace,
+        access_port_source: portSource,
         ...next,
       }),
     })
@@ -229,6 +233,12 @@ export default function SettingsCredentials() {
   const toggleTrace = async (value: boolean) => {
     setTrace(value)
     await putFlags({ http_trace: value }).catch(() => setTrace(!value))
+  }
+
+  const changePortSource = async (value: string) => {
+    const previous = portSource
+    setPortSource(value)
+    await putFlags({ access_port_source: value }).catch(() => setPortSource(previous))
   }
 
   const togglePnpState = async (state: string, checked: boolean) => {
@@ -527,6 +537,46 @@ export default function SettingsCredentials() {
               checked={provision}
               onChange={(v) => void toggleProvision(v)}
             />
+          </div>
+        </section>
+
+        <section className={cardClass} aria-label="Access ports">
+          <h2 className="text-lg font-semibold">Access ports</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Where the Day-N <code>ACCESS_PORTS</code> variable comes from.
+          </p>
+          <div className="mt-3 flex flex-col gap-2">
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                name="access-port-source"
+                id="access-ports-netbox"
+                className="mt-1"
+                checked={portSource === 'netbox'}
+                onChange={() => void changePortSource('netbox')}
+              />
+              <span>
+                <strong>From NetBox</strong> &mdash; physical ports that are not management ports
+                and not cabled to another device. Uplinks are excluded because NetBox knows what
+                they are connected to.
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                name="access-port-source"
+                id="access-ports-device"
+                className="mt-1"
+                checked={portSource === 'device'}
+                onChange={() => void changePortSource('device')}
+              />
+              <span>
+                <strong>Let the template decide</strong> &mdash; the variable is left empty and the
+                template falls back to its own on-device <code>$__interface</code> loop. Use this if
+                NetBox cabling is not maintained, or once Catalyst Center offers a native way to
+                apply port configuration.
+              </span>
+            </label>
           </div>
         </section>
 

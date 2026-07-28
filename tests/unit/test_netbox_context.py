@@ -474,3 +474,29 @@ def test_access_ports_are_the_uncabled_physical_ports() -> None:
     assert ctx["access_ports"] == "GigabitEthernet1/0/1,GigabitEthernet1/0/2"
     assert ctx["access_port_count"] == "2"
     assert ctx["uplink_ports"] == "TwoGigabitEthernet1/0/47"
+
+
+async def test_access_port_source_device_blanks_the_netbox_list() -> None:
+    """The escape hatch: with source "device" the template falls back to its own
+    $__interface loop instead of the NetBox-derived list."""
+    import respx
+    from app.clients.netbox import NetBoxClient
+    from app.services.dayn import load_device_context
+
+    device = {"id": 1, "name": "sw-1", "site": {"id": 10}}
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.get(url__regex=r".*/api/dcim/interfaces/.*").respond(
+            200,
+            json={
+                "results": [{"name": "Gi1/0/1", "type": {"value": "1000base-t"}}],
+                "next": None,
+            },
+        )
+        respx_mock.get(url__regex=r".*/api/.*").respond(200, json={"results": [], "next": None})
+        async with NetBoxClient("https://netbox.example.com", "tok") as netbox:
+            netbox_ctx = await load_device_context(netbox, device, "netbox")
+            device_ctx = await load_device_context(netbox, device, "device")
+
+    assert netbox_ctx["device"]["access_ports"] == "Gi1/0/1"
+    assert device_ctx["device"]["access_ports"] == ""
+    assert device_ctx["device"]["access_port_count"] == ""

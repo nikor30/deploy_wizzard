@@ -1042,3 +1042,33 @@ misses a front-panel port on a module.
 - [x] `trace_http()` in base client, wired into catalyst + netbox
 - [x] `access_ports` / `access_port_count` in `build_device_context` + aliases
 - [x] 235 pytest / 39 vitest / 4 e2e green
+
+## Access-port source is selectable (v1.15.0) ✅
+
+Settings → Access ports offers two sources for the Day-N `ACCESS_PORTS`
+variable:
+
+- **From NetBox** (default) — physical, non-management ports that NetBox does
+  not show as cabled to another device, so uplinks are excluded by what they
+  connect to rather than by their port name.
+- **Let the template decide** — `ACCESS_PORTS` resolves to an empty string and
+  the template's own `$__interface` loop runs. The escape hatch for unmaintained
+  NetBox cabling, and the seam for a native Catalyst Center port-config API if
+  one appears.
+
+`load_device_context()` takes the source and blanks `access_ports` /
+`access_port_count` in "device" mode — blank rather than absent, so the
+template's `#if` picks the fallback and the wizard shows the variable as
+unresolved instead of silently pushing a list the operator opted out of.
+
+`IT_DayN_Port_Template` was rewritten around this: `#if($ACCESS_PORTS != "")`
+iterates the NetBox list, `#else` keeps the original on-device loop verbatim.
+
+- [x] `ACCESS_PORT_SOURCES` + `access_port_source` flag (store, API, UI radio)
+- [x] `load_device_context(..., access_port_source)` + test for both modes
+- [x] Template rewritten with both branches, shared with the user
+- [x] 236 pytest / 39 vitest / 4 e2e green
+
+**Still open:** provisioning `NCSP11001`. The trace capture supplied was the
+template-list GET, not the `provisionDevices` call, so the payload CCC objects
+to is still unknown.

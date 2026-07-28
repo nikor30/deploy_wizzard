@@ -119,3 +119,9 @@ def http_trace(db: Session) -> bool:
     """
     row = db.get(AppSetting, "http_trace")
     return row is not None and row.value == "true"
+
+
+def access_port_source(db: Session) -> str:
+    """Where the Day-N access-port list comes from: "netbox" or "device"."""
+    row = db.get(AppSetting, "access_port_source")
+    return row.value if row is not None and row.value in ("netbox", "device") else "netbox"
