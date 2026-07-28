@@ -390,6 +390,10 @@ def test_interactive_prompt_failure_gets_an_actionable_hint() -> None:
     hint = interactive_prompt_hint(reason)
     assert "#INTERACTIVE" in hint
     assert "<IQ>" in hint and "<R>" in hint
+    # the conversion command must be the EXEC-mode one-shot converter:
+    # `authentication display` is EXEC-only and rejected in config mode
+    assert "authentication convert-to new-style" in hint
+    assert "#MODE_ENABLE" in hint
     # an ordinary CLI rejection gets no interactive hint
     assert interactive_prompt_hint("Invalid CLI - Current output : bogus command") == ""
     assert interactive_prompt_hint("Device unreachable") == ""
