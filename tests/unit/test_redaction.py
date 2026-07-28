@@ -61,6 +61,9 @@ async def test_http_trace_logs_bodies_but_never_a_token(client: TestClient) -> N
             respx_mock.post("https://ccc.example.com/dna/system/api/v1/auth/token").respond(
                 200, json={"Token": "super-secret-token"}
             )
+            respx_mock.get(
+                "https://ccc.example.com/dna/intent/api/v1/sda/provisionDevices"
+            ).respond(200, json={"response": []})
             respx_mock.post(
                 "https://ccc.example.com/dna/intent/api/v1/sda/provisionDevices"
             ).respond(400, json={"errorCode": "NCSP11001", "message": "intent validation failed"})
@@ -71,7 +74,11 @@ async def test_http_trace_logs_bodies_but_never_a_token(client: TestClient) -> N
         set_http_trace(False)
         logging.getLogger("app.clients").removeHandler(handler)
 
-    traced = [r for r in records if getattr(r, "http_path", None)]
+    traced = [
+        r
+        for r in records
+        if getattr(r, "http_path", None) and getattr(r, "http_method", "") == "POST"
+    ]
     assert traced, "the failing call must be captured"
     entry = json.loads(JsonFormatter().format(traced[0]))
     assert entry["http_status"] == 400

@@ -404,6 +404,20 @@ class CatalystCenterClient:
             json={"networkdevice": [device_uuid]},
         )
 
+    async def get_provisioned_device(self, device_uuid: str) -> dict[str, Any] | None:
+        """The device's existing provisioning record, or None if it has none.
+
+        PnP site-claim already registers the device as provisioned, so a *new*
+        provision (POST) is rejected by intent validation (NCSP11001) — the
+        correct call for an already-provisioned device is a re-provision (PUT).
+        """
+        response = await self._get(
+            "/dna/intent/api/v1/sda/provisionDevices",
+            params={"networkDeviceId": device_uuid},
+        )
+        entries = response.json().get("response") or []
+        return dict(entries[0]) if entries else None
+
     async def provision_devices(self, site_id: str, device_uuid: str) -> dict[str, Any]:
         """Provision a device to its site so the site's network settings — AAA,
         RADIUS/TACACS, DNS, DHCP, NTP, syslog, SNMP — are pushed to it.
@@ -413,16 +427,30 @@ class CatalystCenterClient:
         Only provisioning does, which is why an otherwise green onboarding left
         the switch without any AAA config.
 
-        `POST /dna/intent/api/v1/sda/provisionDevices` takes a list of
+        `/dna/intent/api/v1/sda/provisionDevices` takes a list of
         `{siteId, networkDeviceId}` and answers with a task. Despite the `sda`
         path segment this is the general provision API in 2.3.7, not fabric-only
         (see the Catalyst Center 2.3.7 "Provision devices" API reference).
+
+        **POST creates a provisioning, PUT updates one.** A device claimed via
+        PnP already has a provisioning record, so POST passes the request check
+        (HTTP 202) and then fails inside the task with `NCSP11001: User intent
+        validation failed`. Existing record ⇒ PUT, carrying the record's `id`.
         Not retried — provisioning is not idempotent.
         """
+        existing = await self.get_provisioned_device(device_uuid)
+        entry: dict[str, Any] = {"siteId": site_id, "networkDeviceId": device_uuid}
+        method = "POST"
+        if existing is not None:
+            method = "PUT"
+            if existing.get("id"):
+                entry["id"] = str(existing["id"])
+            logger.info(
+                "Device %s is already provisioned — re-provisioning (PUT) instead of POST",
+                device_uuid,
+            )
         response = await self._request(
-            "POST",
-            "/dna/intent/api/v1/sda/provisionDevices",
-            json=[{"siteId": site_id, "networkDeviceId": device_uuid}],
+            method, "/dna/intent/api/v1/sda/provisionDevices", json=[entry]
         )
         return dict(response.json())
 

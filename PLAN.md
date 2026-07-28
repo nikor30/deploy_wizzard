@@ -1072,3 +1072,28 @@ iterates the NetBox list, `#else` keeps the original on-device loop verbatim.
 **Still open:** provisioning `NCSP11001`. The trace capture supplied was the
 template-list GET, not the `provisionDevices` call, so the payload CCC objects
 to is still unknown.
+
+## Provisioning: POST creates, PUT re-provisions (v1.16.0) ✅
+
+The HTTP trace settled `NCSP11001`. The POST is **accepted** — HTTP 202 with a
+taskId — and the intent validation fails *later, inside the task*. So the URL,
+body shape and IDs were all correct; the verb was wrong.
+
+PnP site-claim already registers a provisioning record, so POST ("create a
+provisioning") is rejected for a device that has one. `provision_devices()` now
+does `GET /sda/provisionDevices?networkDeviceId=…` first: a record ⇒ **PUT**
+(re-provision) carrying its `id`, no record ⇒ POST as before.
+
+**Webhook errors now carry the receiver's own words.** A bare `HTTP 401` cannot
+be acted on — missing token, wrong token and rejected schema all look the same.
+Up to 500 chars of the response body is kept in the delivery error.
+
+**Settings → ISE Webhook → "Send test delivery"** posts a probe through the same
+sender a real notification uses, so auth can be fixed without running a claim. A
+401 answer adds a pointer to the Auth token field.
+
+- [x] `get_provisioned_device()` + POST/PUT branch + tests for both paths
+- [x] Webhook error detail + regression test
+- [x] `POST /api/settings/credentials/webhook/test` + UI button
+- [x] Mock CCC gained GET/PUT provisionDevices
+- [x] 239 pytest / 39 vitest / 4 e2e green

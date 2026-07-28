@@ -160,6 +160,19 @@ def create_ccc_app() -> FastAPI:
             STATE.device_tags.setdefault(str(uuid), []).append(tag_id)
         return {"response": {"taskId": "tag-task"}}
 
+    @app.get("/dna/intent/api/v1/sda/provisionDevices")
+    def provisioned(request: Request, networkDeviceId: str = "") -> dict[str, Any]:
+        _check_token(request)
+        if networkDeviceId in STATE.provisioned:
+            return {
+                "response": [{"id": f"prov-{networkDeviceId}", "networkDeviceId": networkDeviceId}]
+            }
+        return {"response": []}
+
+    @app.put("/dna/intent/api/v1/sda/provisionDevices")
+    async def reprovision(request: Request) -> dict[str, Any]:
+        return await provision(request)
+
     @app.post("/dna/intent/api/v1/sda/provisionDevices")
     async def provision(request: Request) -> dict[str, Any]:
         """Provision to site — this is what pushes the site's network settings."""

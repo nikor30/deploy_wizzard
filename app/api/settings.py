@@ -1,6 +1,7 @@
 """Settings API: credentials are write-only; GET returns masked values."""
 
 import logging
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,6 +15,7 @@ from app.clients.catalyst import (
     CatalystCenterClient,
 )
 from app.clients.netbox import NetBoxClient
+from app.clients.webhook import send_webhook
 from app.crypto import mask_secret
 from app.db.models import AppSetting, DayNMapping, ServiceSettings, TemplateSecret
 from app.db.session import get_db
@@ -149,6 +151,45 @@ async def test_catalyst(payload: TestRequest, db: DbSession) -> TestResult:
         logger.warning("Catalyst connection test failed: %s", exc.message)
         return TestResult(ok=False, detail=exc.message)
     return TestResult(ok=True, detail=f"Connected. {site_count} sites visible.")
+
+
+@router.post("/credentials/webhook/test")
+async def test_webhook(payload: TestRequest, db: DbSession) -> TestResult:
+    """Send a probe delivery so auth can be fixed without running a claim.
+
+    Uses the same sender as a real notification, so whatever the receiver
+    answers here is exactly what a Day-0 delivery would get.
+    """
+    base_url, _, secret, tls_verify = _resolve_test_input(db, "webhook", payload)
+    stored = settings_store.get_service_settings(db, "webhook")
+    auth_token = payload.auth_token or settings_store.decrypt_auth_token(stored)
+    auth_header = payload.auth_header or (stored.auth_header if stored else None)
+    probe = {
+        "event": "test",
+        "timestamp": datetime.now(tz=UTC).isoformat(),
+        "job_id": 0,
+        "device": {"serial": "TEST0000000", "hostname": "pnp-bridge-test"},
+    }
+    result = await send_webhook(
+        base_url,
+        probe,
+        secret=secret,
+        tls_verify=tls_verify,
+        auth_header=auth_header,
+        auth_token=auth_token,
+    )
+    if result.ok:
+        return TestResult(ok=True, detail=f"Delivered (HTTP {result.status_code}).")
+    logger.warning("Webhook test delivery failed: %s", result.error)
+    return TestResult(
+        ok=False,
+        detail=(
+            f"{result.error} — a 401 usually means the receiver wants a token: set it under "
+            "'Auth token' (include any prefix, e.g. 'Bearer abc123')."
+            if result.status_code == 401
+            else str(result.error)
+        ),
+    )
 
 
 class DayNMappingItem(BaseModel):

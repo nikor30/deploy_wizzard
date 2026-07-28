@@ -90,3 +90,15 @@ async def test_auth_header_name_is_configurable() -> None:
             URL, {"event": "day0_success"}, auth_header="X-Api-Token", auth_token="plain-token"
         )
     assert route.calls[0].request.headers["X-Api-Token"] == "plain-token"
+
+
+async def test_failure_error_carries_the_receivers_own_words() -> None:
+    """A bare "HTTP 401" cannot be acted on: a missing token, a wrong token and
+    a rejected schema all look identical. The receiver's body is what tells the
+    operator which one it is."""
+    with respx.mock as respx_mock:
+        respx_mock.post(URL).respond(401, text='{"detail":"invalid or missing token"}')
+        result = await send_webhook(URL, {"event": "day0_success"})
+    assert not result.ok
+    assert result.status_code == 401
+    assert "invalid or missing token" in (result.error or "")
