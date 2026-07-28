@@ -42,6 +42,37 @@ SECRET_MASK = "****"
 # ports: virtual SVIs, LAG bundles and bridges.
 NON_PHYSICAL_INTERFACE_TYPES: frozenset[str] = frozenset({"virtual", "lag", "bridge"})
 
+# NetBox interface 802.1Q modes that mean "trunk". Pushing `switchport mode
+# access` at one of these is what broke a Day-N run part-way through: the switch
+# answers with a confirmation prompt (or a rejection) instead of the config
+# prompt Catalyst Center waits for, and CCC aborts the whole push as invalid
+# CLI — leaving the ports it had already done configured and the rest not.
+TRUNK_INTERFACE_MODES: frozenset[str] = frozenset({"tagged", "tagged-all"})
+
+
+def _is_access_port(iface: dict[str, Any], uplink_names: set[str]) -> bool:
+    """True for a port the ISE access-port config may safely be pushed to.
+
+    Excluded, in order of how badly each one bites:
+    * port-channel members (`lag` set) — IOS rejects `switchport mode access`
+      until the port leaves the channel;
+    * trunks (`mode` tagged/tagged-all) — same problem, and they are uplinks or
+      inter-switch links by definition;
+    * anything cabled to another device (already collected as an uplink);
+    * management-only ports and non-physical types (SVI/LAG/bridge).
+    """
+    name = iface.get("name")
+    if not name or iface.get("mgmt_only") or iface.get("lag"):
+        return False
+    if str(name) in uplink_names:
+        return False
+    if (iface.get("type") or {}).get("value") in NON_PHYSICAL_INTERFACE_TYPES:
+        return False
+    mode = iface.get("mode")
+    mode_value = mode.get("value") if isinstance(mode, dict) else mode
+    return mode_value not in TRUNK_INTERFACE_MODES
+
+
 # Uplink port-channel description convention: UPL:<far-end switch name>.
 UPLINK_DESCRIPTION_PREFIX = "UPL:"
 # Access switches always use port-channel 1 for their uplink.
@@ -361,12 +392,7 @@ def build_device_context(
     # another device, so drive it from there instead.
     uplink_names = {str(u["name"]) for u in uplinks if u.get("name")}
     access_ports = [
-        str(iface["name"])
-        for iface in interfaces or []
-        if iface.get("name")
-        and not iface.get("mgmt_only")
-        and str(iface["name"]) not in uplink_names
-        and (iface.get("type") or {}).get("value") not in NON_PHYSICAL_INTERFACE_TYPES
+        str(iface["name"]) for iface in interfaces or [] if _is_access_port(iface, uplink_names)
     ]
     ctx["access_ports"] = ",".join(access_ports)
     ctx["access_port_count"] = str(len(access_ports))

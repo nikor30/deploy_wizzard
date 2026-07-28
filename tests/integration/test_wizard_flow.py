@@ -70,9 +70,9 @@ def test_full_happy_path_step1_to_step5(configured_client: TestClient, mock: htt
     assert parameters["HOSTNAME"].startswith("sw-ffm-")
     assert parameters["MGMT_IP"].startswith("172.20.10.")
 
-    # Provisioned to site: this is the step that pushes the site's network
-    # settings (AAA/RADIUS/TACACS, DNS, DHCP) — claim alone never does.
-    assert len(snapshot["provisioned"]) == len(job["devices"])
+    # Provisioning is opt-in (see test_provisioning_is_off_by_default), so the
+    # happy path claims without it; role + tag still land.
+    assert snapshot["provisioned"] == []
     # role + tag mirrored into CCC inventory from the NetBox role
     assert set(snapshot["device_roles"].values()) == {"ACCESS"}
     assert all(tags for tags in snapshot["device_tags"].values())
@@ -249,6 +249,8 @@ def test_provision_failure_warns_but_still_allows_day_n(
     its site's AAA/RADIUS/DNS/DHCP is not a silent success either."""
     client = configured_client
     mock.post("/__mock__/config", json={"provision_fail": True})
+    flags = client.get("/api/settings/flags").json()
+    client.put("/api/settings/flags", json={**flags, "provision_after_claim": True})
     job = _create_matched_job(client)
     client.post(f"/api/wizard/jobs/{job['id']}/claim", json={"config_id": "tpl-day0", **FAST})
 
@@ -259,12 +261,12 @@ def test_provision_failure_warns_but_still_allows_day_n(
     assert "AAA/RADIUS/DNS/DHCP" in error
 
 
-def test_provisioning_can_be_turned_off(configured_client: TestClient, mock: httpx.Client) -> None:
-    """Escape hatch for controllers that do not expose the provision API."""
+def test_provisioning_is_off_by_default(configured_client: TestClient, mock: httpx.Client) -> None:
+    """Off until the API call is proven on a live controller: it fails there with
+    NCSP11001, which turned every Day-0 into a claim plus a red warning."""
     client = configured_client
     mock.post("/__mock__/config", json={"provision_fail": True})
-    flags = client.get("/api/settings/flags").json()
-    client.put("/api/settings/flags", json={**flags, "provision_after_claim": False})
+    assert client.get("/api/settings/flags").json()["provision_after_claim"] is False
 
     job = _create_matched_job(client)
     client.post(f"/api/wizard/jobs/{job['id']}/claim", json={"config_id": "tpl-day0", **FAST})
