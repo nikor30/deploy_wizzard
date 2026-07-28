@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 import app.clients.base as base
@@ -372,3 +373,42 @@ async def test_composite_without_usable_members_fails_loudly() -> None:
     async with CatalystCenterClient(BASE, "admin", "pw") as client:
         with pytest.raises(CatalystError, match="no usable member templates"):
             await client.get_deployable_templates("comp-2")
+
+
+async def test_already_provisioned_device_is_re_provisioned_with_put() -> None:
+    """PnP site-claim already registers a provisioning record, so a POST passes
+    the request check (HTTP 202) and then fails inside the task with NCSP11001
+    'User intent validation failed'. An existing record means PUT."""
+    with respx.mock as respx_mock:
+        respx_mock.post(f"{BASE}/dna/system/api/v1/auth/token").respond(200, json={"Token": "t"})
+        respx_mock.get(f"{BASE}/dna/intent/api/v1/sda/provisionDevices").respond(
+            200, json={"response": [{"id": "prov-1", "networkDeviceId": "dev-1"}]}
+        )
+        put = respx_mock.put(f"{BASE}/dna/intent/api/v1/sda/provisionDevices").respond(
+            202, json={"response": {"taskId": "task-1"}}
+        )
+        async with CatalystCenterClient(BASE, "admin", "pw") as client:
+            await client.provision_devices("site-1", "dev-1")
+
+    assert put.called, "an already-provisioned device must be re-provisioned, not re-created"
+    assert json.loads(put.calls[0].request.content) == [
+        {"siteId": "site-1", "networkDeviceId": "dev-1", "id": "prov-1"}
+    ]
+
+
+async def test_unprovisioned_device_is_provisioned_with_post() -> None:
+    with respx.mock as respx_mock:
+        respx_mock.post(f"{BASE}/dna/system/api/v1/auth/token").respond(200, json={"Token": "t"})
+        respx_mock.get(f"{BASE}/dna/intent/api/v1/sda/provisionDevices").respond(
+            200, json={"response": []}
+        )
+        post = respx_mock.post(f"{BASE}/dna/intent/api/v1/sda/provisionDevices").respond(
+            202, json={"response": {"taskId": "task-1"}}
+        )
+        async with CatalystCenterClient(BASE, "admin", "pw") as client:
+            await client.provision_devices("site-1", "dev-1")
+
+    assert post.called
+    assert json.loads(post.calls[0].request.content) == [
+        {"siteId": "site-1", "networkDeviceId": "dev-1"}
+    ]

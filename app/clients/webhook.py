@@ -19,6 +19,8 @@ from app.clients.base import DEFAULT_TIMEOUT
 SIGNATURE_HEADER = "X-PnPB-Signature"
 # Header used for the caller's token when none is configured explicitly.
 DEFAULT_AUTH_HEADER = "Authorization"
+# How much of the receiver's response body to keep in the delivery error.
+RESPONSE_DETAIL_LIMIT = 500
 MAX_RETRIES = 3
 BACKOFF_BASE_SECONDS = 1.0
 
@@ -79,6 +81,11 @@ async def send_webhook(
             status_code = response.status_code
             if response.status_code < 400:
                 return WebhookResult(ok=True, attempts=attempts, status_code=status_code)
-            last_error = f"HTTP {response.status_code}"
+            # The bare status hides *why*: 401 from a missing token and 401
+            # from a wrong one look identical, and a schema rejection reads the
+            # same as an auth failure. The receiver's own words are what makes
+            # this actionable from the Logs page.
+            detail = response.text.strip().replace("\n", " ")[:RESPONSE_DETAIL_LIMIT]
+            last_error = f"HTTP {response.status_code}" + (f" — {detail}" if detail else "")
             logger.warning("Webhook delivery attempt %d failed: %s", attempts, last_error)
     return WebhookResult(ok=False, attempts=attempts, status_code=status_code, error=last_error)

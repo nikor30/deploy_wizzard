@@ -63,7 +63,7 @@ export async function putCredentials(
 }
 
 export async function testConnection(
-  service: 'catalyst' | 'netbox',
+  service: 'catalyst' | 'netbox' | 'webhook',
   payload: ServiceSettingsInput,
 ): Promise<TestResult> {
   const res = await check(

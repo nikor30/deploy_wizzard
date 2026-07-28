@@ -286,7 +286,7 @@ export default function SettingsCredentials() {
     }
   }
 
-  const runTest = async (service: 'catalyst' | 'netbox') => {
+  const runTest = async (service: ServiceKey) => {
     setBusy(service)
     setTestResults((prev) => ({ ...prev, [service]: undefined }))
     try {
@@ -454,6 +454,22 @@ export default function SettingsCredentials() {
               checked={form.webhook.enabled}
               onChange={(v) => update('webhook', { enabled: v })}
             />
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                className={buttonClass}
+                disabled={busy !== null}
+                onClick={() => void runTest('webhook')}
+              >
+                {busy === 'webhook' ? 'Sending…' : 'Send test delivery'}
+              </button>
+            </div>
+            <p className="-mt-2 text-xs text-slate-500 dark:text-slate-400">
+              Sends a probe through the same sender a real notification uses, so the receiver
+              answers exactly as it would for a Day-0 delivery &mdash; auth can be fixed here
+              without running a claim.
+            </p>
+            <StatusBanner result={testResults.webhook ?? null} />
           </div>
         </section>
 
