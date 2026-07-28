@@ -500,3 +500,25 @@ async def test_access_port_source_device_blanks_the_netbox_list() -> None:
     assert netbox_ctx["device"]["access_ports"] == "Gi1/0/1"
     assert device_ctx["device"]["access_ports"] == ""
     assert device_ctx["device"]["access_port_count"] == ""
+
+
+def test_trunks_and_port_channel_members_are_never_access_ports() -> None:
+    """Pushing `switchport mode access` at a trunk or a port-channel member makes
+    the switch answer with a prompt instead of the config prompt CCC waits for,
+    so CCC aborts the whole push — leaving the ports it already did configured
+    and the rest not. That is what half-configured a live switch."""
+    from app.services.dayn import build_device_context
+
+    interfaces = [
+        {"name": "Gi1/0/1", "type": {"value": "1000base-t"}},
+        # trunk uplink that NetBox has no cable for — still must not be touched
+        {"name": "Tw1/0/36", "type": {"value": "2.5gbase-t"}, "mode": {"value": "tagged"}},
+        {"name": "Tw1/0/35", "type": {"value": "2.5gbase-t"}, "mode": {"value": "tagged-all"}},
+        # bundled into Port-channel1: IOS rejects switchport mode access here
+        {"name": "Te1/1/3", "type": {"value": "10gbase-x-sfpp"}, "lag": {"id": 9}},
+        {"name": "Gi1/0/2", "type": {"value": "1000base-t"}, "mode": {"value": "access"}},
+    ]
+    ctx = build_device_context({"id": 1, "name": "sw-1"}, interfaces=interfaces)["device"]
+
+    assert ctx["access_ports"] == "Gi1/0/1,Gi1/0/2"
+    assert ctx["access_port_count"] == "2"

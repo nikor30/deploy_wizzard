@@ -427,7 +427,7 @@ class AppFlags(BaseModel):
     # pushes the site's network settings (AAA/RADIUS/TACACS, DNS, DHCP, NTP,
     # syslog) — claim and template deploy do not. On by default; turn it off if
     # the controller does not expose the provision API.
-    provision_after_claim: bool = True
+    provision_after_claim: bool = False
     # Raw request/response logging for Catalyst Center and NetBox, so a failing
     # call can be captured from the Logs page. Bodies are redacted; volume is
     # high, so this is a troubleshooting mode and defaults to off.

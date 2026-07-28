@@ -105,11 +105,15 @@ def provision_after_claim(db: Session) -> bool:
     """Whether to provision a device to its site after a successful claim.
 
     Provisioning is what pushes the site's network settings (AAA/RADIUS/TACACS,
-    DNS, DHCP, NTP, syslog); claim and template deploy do not. Defaults to ON,
-    so an unset row means True.
+    DNS, DHCP, NTP, syslog); claim and template deploy do not.
+
+    Defaults to **OFF**. It was on by default in 1.13.0-1.16.0, and on the live
+    controller it fails with NCSP11001, which turned every Day-0 into a claim
+    plus a red warning. A clean claim is worth more than an attempt at a step
+    that does not yet work, so it is opt-in until it is proven.
     """
     row = db.get(AppSetting, "provision_after_claim")
-    return row is None or row.value == "true"
+    return row is not None and row.value == "true"
 
 
 def http_trace(db: Session) -> bool:

@@ -1097,3 +1097,28 @@ sender a real notification uses, so auth can be fixed without running a claim. A
 - [x] `POST /api/settings/credentials/webhook/test` + UI button
 - [x] Mock CCC gained GET/PUT provisionDevices
 - [x] 239 pytest / 39 vitest / 4 e2e green
+
+## Day-0 clean again; trunks excluded from access ports (v1.17.0) ✅
+
+**Provisioning is now opt-in (default OFF).** It was on by default from 1.13.0,
+and on the live controller it fails with `NCSP11001`, so every Day-0 ended as a
+claim plus a red warning. Day-0 behaves exactly as it did before 1.13.0 again. The
+toggle stays for retrying the API call once it is proven.
+
+**Trunks and port-channel members are excluded from `ACCESS_PORTS`.** A live run
+configured `Te1/0/37-47` and then aborted: CCC pushed `switchport mode access` at
+a port that is a trunk (`Tw1/0/36`) or a port-channel member, the switch answered
+with a prompt instead of the config prompt CCC waits for, and CCC rejected the
+rest of the push as invalid CLI. `_is_access_port()` now also drops interfaces
+with `lag` set or `mode` in {tagged, tagged-all}.
+
+- [x] `provision_after_claim` defaults False (store + API + UI copy)
+- [x] `_is_access_port()` excludes LAG members and trunk modes + test
+- [x] 240 pytest / 39 vitest / 4 e2e green
+
+**Architectural note — the real gap.** TACACS/RADIUS/ISE config comes from the
+site's network settings and the network profile's Day-N templates. Catalyst
+Center applies those during **Provision**, which is what the GUI runs. Template
+deploy pushes template CLI only, so no amount of variable work on our side will
+produce them. Getting `sda/provisionDevices` accepted is therefore the whole
+remaining task, not a side quest.
