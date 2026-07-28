@@ -901,3 +901,15 @@ answers `[y/n]`, `[confirm]` and `ACCEPT?`.
 
 **Demo:** with VLAN 510 selected, DEFAULT_GATEWAY prefills 172.20.10.1 from the
 NetBox IP named "gateway" rather than from the subnet convention.
+
+## Day-N: correct AAA-conversion guidance (v1.11.1) ✅
+
+`authentication display new-style` failed with `% Invalid input`: per Cisco's
+17.14 identity-control-policies guide it is a **privileged-EXEC** command
+(`Device# authentication display new-style`), and CCC template lines run in
+config mode. The hint now recommends the EXEC-mode one-shot converter wrapped
+in `#MODE_ENABLE` + `#INTERACTIVE`:
+`authentication convert-to new-style<IQ>continue<R>yes`.
+
+- [x] `INTERACTIVE_HINT` updated + test asserts the convert-to/EXEC sequence
+- [x] 223 pytest / 39 vitest / 4 e2e green

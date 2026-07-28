@@ -536,15 +536,17 @@ def _deploy_handle(response: dict[str, Any]) -> tuple[str, str]:
 
 INTERACTIVE_HINT = (
     " — the switch asked an interactive question and Catalyst Center could not answer it, so it "
-    "rejected the whole push as 'invalid CLI'. This is template-side: wrap the offending command "
-    "in the Catalyst Center template with the interactive syntax, e.g.\n"
+    "rejected the whole push as 'invalid CLI'. This is template-side. For the AAA legacy→new-style "
+    "(C3PL) conversion, run the one-shot converter in EXEC mode with its prompt answered — note "
+    "that `authentication display` is a privileged-EXEC command and is rejected in config mode:\n"
+    "#MODE_ENABLE\n"
     "#INTERACTIVE\n"
-    "authentication display new-style<IQ>Do you wish to continue? [yes]:<R>yes\n"
+    "authentication convert-to new-style<IQ>continue<R>yes\n"
     "#ENDS_INTERACTIVE\n"
-    "Entering a `class-map type control subscriber` (C3PL) command on a switch still in legacy "
-    "authentication mode triggers exactly this prompt, so converting the device first also fixes "
-    "it. See the Catalyst Center user guide, 'Create Templates to Automate Device Configuration "
-    "Changes'."
+    "#MODE_END_ENABLE\n"
+    "For any other prompting command, wrap that command the same way inside "
+    "#INTERACTIVE…#ENDS_INTERACTIVE. See the Catalyst Center user guide, 'Create Templates to "
+    "Automate Device Configuration Changes'."
 )
 
 
