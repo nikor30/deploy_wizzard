@@ -371,6 +371,11 @@ class AppFlags(BaseModel):
     # Empty = offer every template (the filters are opt-in).
     day0_template_filter: list[str] = []
     dayn_template_filter: list[str] = []
+    # Provision the device to its site after a successful claim. This is what
+    # pushes the site's network settings (AAA/RADIUS/TACACS, DNS, DHCP, NTP,
+    # syslog) — claim and template deploy do not. On by default; turn it off if
+    # the controller does not expose the provision API.
+    provision_after_claim: bool = True
 
     @field_validator("pnp_states")
     @classmethod
@@ -413,6 +418,7 @@ def get_flags(db: DbSession) -> AppFlags:
         pnp_states=pnp_states(db),
         day0_template_filter=template_filter(db, "day0"),
         dayn_template_filter=template_filter(db, "dayn"),
+        provision_after_claim=settings_store.provision_after_claim(db),
     )
 
 
@@ -422,6 +428,7 @@ def put_flags(payload: AppFlags, db: DbSession) -> AppFlags:
     _set_setting(db, "pnp_states", ",".join(payload.pnp_states))
     _set_setting(db, "day0_template_filter", ",".join(payload.day0_template_filter))
     _set_setting(db, "dayn_template_filter", ",".join(payload.dayn_template_filter))
+    _set_setting(db, "provision_after_claim", "true" if payload.provision_after_claim else "false")
     db.flush()
     logger.info(
         "Set app flags: debug=%s pnp_states=%s", payload.debug, ",".join(payload.pnp_states)

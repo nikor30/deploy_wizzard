@@ -63,6 +63,7 @@ class MatchResult:
     netbox_name: str | None = None
     netbox_site_id: int | None = None
     netbox_site_name: str | None = None
+    netbox_role: str | None = None
     ccc_site_id: str | None = None
     ccc_site_name: str | None = None
     mgmt_ip: str | None = None
@@ -143,6 +144,7 @@ async def match_serials(
                 netbox_name=device.get("name"),
                 netbox_site_id=site_id,
                 netbox_site_name=site.get("name"),
+                netbox_role=(device.get("role") or {}).get("name"),
                 ccc_site_id=mapping[0] if mapping else None,
                 ccc_site_name=mapping[1] if mapping else None,
                 mgmt_ip=mgmt_ip,

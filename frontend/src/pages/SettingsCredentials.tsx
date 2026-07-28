@@ -26,6 +26,7 @@ interface AppFlags {
   pnp_states?: string[]
   day0_template_filter?: string[]
   dayn_template_filter?: string[]
+  provision_after_claim?: boolean
 }
 
 /** "onboard, webasto" -> ["onboard", "webasto"] (blanks dropped) */
@@ -167,6 +168,7 @@ export default function SettingsCredentials() {
   const [testResults, setTestResults] = useState<Partial<Record<ServiceKey, TestResult>>>({})
   const [busy, setBusy] = useState<string | null>(null)
   const [debug, setDebug] = useState(false)
+  const [provision, setProvision] = useState(true)
   const [pnpStates, setPnpStates] = useState<string[]>(DEFAULT_PNP_STATES)
   // kept as the raw comma-separated text so typing a comma isn't fought with
   const [day0Filter, setDay0Filter] = useState('')
@@ -183,6 +185,7 @@ export default function SettingsCredentials() {
         if (f.pnp_states?.length) setPnpStates(f.pnp_states)
         setDay0Filter((f.day0_template_filter ?? []).join(', '))
         setDaynFilter((f.dayn_template_filter ?? []).join(', '))
+        setProvision(f.provision_after_claim ?? true)
       })
       .catch(() => setDebug(false))
   }, [])
@@ -196,6 +199,7 @@ export default function SettingsCredentials() {
         pnp_states: pnpStates,
         day0_template_filter: toWords(day0Filter),
         dayn_template_filter: toWords(daynFilter),
+        provision_after_claim: provision,
         ...next,
       }),
     })
@@ -203,6 +207,11 @@ export default function SettingsCredentials() {
   const toggleDebug = async (value: boolean) => {
     setDebug(value)
     await putFlags({ debug: value }).catch(() => setDebug(!value))
+  }
+
+  const toggleProvision = async (value: boolean) => {
+    setProvision(value)
+    await putFlags({ provision_after_claim: value }).catch(() => setProvision(!value))
   }
 
   const togglePnpState = async (state: string, checked: boolean) => {
@@ -461,6 +470,25 @@ export default function SettingsCredentials() {
                 onBlur={(e) => saveTemplateFilter('dayn', e.target.value)}
               />
             </label>
+          </div>
+        </section>
+
+        <section className={cardClass} aria-label="Provisioning">
+          <h2 className="text-lg font-semibold">Provisioning</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            After a successful claim, provision the device to its site. This is the step that pushes
+            the site&rsquo;s network settings &mdash; AAA/RADIUS/TACACS, DNS, DHCP, NTP, syslog
+            &mdash; to the switch. Claiming and deploying templates do <em>not</em>. Turn this off
+            only if your controller does not expose the provision API; the switch will then have no
+            AAA config until you provision it by hand in Catalyst Center.
+          </p>
+          <div className="mt-3">
+            <Toggle
+              label="Provision to site after claim"
+              id="provision-after-claim"
+              checked={provision}
+              onChange={(v) => void toggleProvision(v)}
+            />
           </div>
         </section>
 

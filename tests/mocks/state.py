@@ -28,6 +28,10 @@ class MockState:
     claims: list[dict[str, Any]] = field(default_factory=list)
     tasks: dict[str, dict[str, Any]] = field(default_factory=dict)
     task_counter: int = 0
+    # post-claim inventory metadata + provision-to-site
+    device_roles: dict[str, str] = field(default_factory=dict)
+    device_tags: dict[str, list[str]] = field(default_factory=dict)
+    provisioned: list[str] = field(default_factory=list)
     token_counter: int = 0
     # NetBox
     netbox_devices: dict[int, dict[str, Any]] = field(default_factory=dict)
@@ -38,6 +42,7 @@ class MockState:
     fail_next_ccc_gets: int = 0
     fail_onboarding_serials: list[str] = field(default_factory=list)
     dayn_task_fail: bool = False
+    provision_fail: bool = False
     netbox_patch_fail: bool = False
     ise_fail: bool = False
     claim_polls: int = 1
@@ -56,6 +61,9 @@ def seed(state: MockState, devices: int = 2) -> None:
     state.claims = []
     state.tasks = {}
     state.deliveries = []
+    state.device_roles = {}
+    state.device_tags = {}
+    state.provisioned = []
     for i in range(1, devices + 1):
         serial = f"SN{i:06d}"
         state.pnp_devices[f"pnp-{i}"] = {

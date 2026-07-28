@@ -50,6 +50,7 @@ class JobDevice(Base):
     netbox_device_id: Mapped[int | None]
     netbox_name: Mapped[str | None] = mapped_column(String(256))
     netbox_site_id: Mapped[int | None]
+    netbox_role: Mapped[str | None] = mapped_column(String(128))
     netbox_site_name: Mapped[str | None] = mapped_column(String(256))
     ccc_site_id: Mapped[str | None] = mapped_column(String(64))
     ccc_site_name: Mapped[str | None] = mapped_column(String(512))

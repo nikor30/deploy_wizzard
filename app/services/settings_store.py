@@ -86,3 +86,14 @@ def decrypt_secret(row: ServiceSettings | None) -> str | None:
     if row is None or not row.secret_encrypted:
         return None
     return get_secret_box().decrypt(row.secret_encrypted)
+
+
+def provision_after_claim(db: Session) -> bool:
+    """Whether to provision a device to its site after a successful claim.
+
+    Provisioning is what pushes the site's network settings (AAA/RADIUS/TACACS,
+    DNS, DHCP, NTP, syslog); claim and template deploy do not. Defaults to ON,
+    so an unset row means True.
+    """
+    row = db.get(AppSetting, "provision_after_claim")
+    return row is None or row.value == "true"

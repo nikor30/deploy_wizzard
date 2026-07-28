@@ -94,6 +94,25 @@ def _mock_ccc(respx_mock: respx.MockRouter) -> None:
     respx_mock.post(f"{CCC}/dna/intent/api/v1/onboarding/pnp-device/site-claim").respond(
         200, json={"response": "Device Claimed"}
     )
+    _mock_inventory_and_provision(respx_mock)
+
+
+def _mock_inventory_and_provision(respx_mock: respx.MockRouter) -> None:
+    """Inventory lookup + role/tag + provision-to-site, all post-claim."""
+    respx_mock.get(url__regex=rf"{CCC}/dna/intent/api/v1/network-device/ip-address/.*").respond(
+        200, json={"response": {"id": "ccc-uuid-1"}}
+    )
+    respx_mock.put(f"{CCC}/dna/intent/api/v1/network-device/brief").respond(200, json={})
+    respx_mock.get(f"{CCC}/dna/intent/api/v1/tag").respond(
+        200, json={"response": [{"id": "tag-1", "name": "Access"}]}
+    )
+    respx_mock.post(url__regex=rf"{CCC}/dna/intent/api/v1/tag/.*/member").respond(200, json={})
+    respx_mock.post(f"{CCC}/dna/intent/api/v1/sda/provisionDevices").respond(
+        200, json={"response": {"taskId": "prov-task-1"}}
+    )
+    respx_mock.get(f"{CCC}/dna/intent/api/v1/task/prov-task-1").respond(
+        200, json={"response": {"isError": False, "endTime": 123}}
+    )
 
 
 def _pnp_state(respx_mock: respx.MockRouter, device_id: str, info: dict[str, Any]) -> None:

@@ -19,7 +19,7 @@ from app.db.models import Job, JobDevice, ServiceSettings, TemplateSecret, Webho
 from app.db.session import open_session
 from app.errors import ConfigurationError, PnPBridgeError, TaskTimeout
 from app.services import settings_store
-from app.services.dayn import SECRET, SECRET_MASK, hidden_variable, resolve_path
+from app.services.dayn import SECRET, SECRET_MASK, hidden_variable, poll_task, resolve_path
 from app.services.matching import MATCHED
 
 logger = logging.getLogger(__name__)
@@ -335,12 +335,19 @@ CCC_ROLES: tuple[tuple[str, str], ...] = (
 ROLE_VARIABLES: tuple[str, ...] = ("SWITCHTYPE", "SWITCHTYP", "DEVICEROLE", "ROLE")
 
 
-def device_role_name(day0_variables: dict[str, Any] | None) -> str | None:
-    """The role the operator saw (and could edit) in wizard step 3."""
+def device_role_name(
+    day0_variables: dict[str, Any] | None, netbox_role: str | None = None
+) -> str | None:
+    """The role to mirror into CCC inventory.
+
+    The value the operator saw (and could edit) in wizard step 3 wins, so an
+    edit there is honoured. Not every Day-0 template declares a role variable
+    though, and the role is still known from the NetBox match — so fall back to
+    that rather than leaving the CCC inventory role unset."""
     for key, value in (day0_variables or {}).items():
         if _normalize_var(key) in ROLE_VARIABLES and str(value).strip():
             return str(value).strip()
-    return None
+    return netbox_role.strip() if netbox_role and netbox_role.strip() else None
 
 
 def ccc_role(role_name: str | None) -> str | None:
@@ -368,7 +375,7 @@ async def _apply_inventory_metadata(
             return
         serial = device.serial
         ip = device.mgmt_ip.split("/")[0]
-        role_name = device_role_name(device.day0_variables)
+        role_name = device_role_name(device.day0_variables, device.netbox_role)
 
     if not role_name:
         return
@@ -398,6 +405,55 @@ async def _apply_inventory_metadata(
         )
 
 
+async def _provision_to_site(
+    client: CatalystCenterClient,
+    job_id: int,
+    device_id: int,
+    poll_interval: float,
+    device_timeout: float,
+) -> str | None:
+    """Provision the claimed device to its site; returns an error or None.
+
+    This is the step that pushes the site's network settings (AAA, RADIUS/
+    TACACS, DNS, DHCP, NTP, syslog) to the switch. Claim + template deploy do
+    not, which is why an otherwise green onboarding produced a switch with no
+    AAA config at all.
+    """
+    with open_session() as db:
+        device = db.get(JobDevice, device_id)
+        if device is None:
+            return None
+        serial = device.serial
+        site_id = device.ccc_site_id
+        ip = (device.mgmt_ip or "").split("/")[0]
+    if not site_id:
+        return "No Catalyst Center site resolved for this device — cannot provision."
+    if not ip:
+        return "No management IP for this device — cannot look it up in CCC inventory."
+
+    inventory = await client.get_network_device_by_ip(ip)
+    uuid = str(inventory.get("id") or "")
+    if not uuid:
+        return (
+            f"Device {ip} is not in the Catalyst Center inventory yet, so it cannot be "
+            "provisioned. Network settings (AAA/RADIUS/DNS/DHCP) were NOT applied."
+        )
+    response = await client.provision_devices(site_id, uuid)
+    inner = response.get("response")
+    task_id = (inner or {}).get("taskId") if isinstance(inner, dict) else None
+    if not task_id:
+        return "Catalyst Center accepted the provision request but returned no taskId."
+    await poll_task(
+        client,
+        str(task_id),
+        poll_interval=poll_interval,
+        task_timeout=device_timeout,
+        label="Provisioning",
+    )
+    logger.info("Provisioned to site", extra={"job_id": job_id, "serial": serial})
+    return None
+
+
 async def _claim_one(
     client: CatalystCenterClient,
     job_id: int,
@@ -405,6 +461,7 @@ async def _claim_one(
     payload: dict[str, Any],
     poll_interval: float,
     device_timeout: float,
+    provision: bool,
 ) -> None:
     ccc_device_id = payload["deviceId"]
     _set_device_state(device_id, "claiming")
@@ -440,8 +497,40 @@ async def _claim_one(
         _set_device_state(device_id, "failed", error=str(exc))
         return
 
-    _set_device_state(device_id, "success")
     await _apply_inventory_metadata(client, job_id, device_id)
+
+    if provision:
+        try:
+            error = await _provision_to_site(
+                client, job_id, device_id, poll_interval, device_timeout
+            )
+        except PnPBridgeError as exc:
+            error = exc.message
+        except Exception as exc:  # per-device isolation
+            logger.exception("Unexpected provisioning error", extra={"job_id": job_id})
+            error = str(exc)
+        if error:
+            # The claim itself worked, so say so — but do NOT call this a
+            # success: without provisioning the switch has no AAA/RADIUS/DNS/
+            # DHCP from its site, which is precisely the silent gap this step
+            # exists to close.
+            logger.error(
+                "Claim succeeded but provisioning failed",
+                extra={"job_id": job_id, "ccc_device_id": ccc_device_id, "error": error},
+            )
+            _set_device_state(
+                device_id,
+                "failed",
+                error=(
+                    f"Day-0 claim succeeded, but provisioning the device to its site failed, "
+                    f"so the site's network settings (AAA/RADIUS/DNS/DHCP) were not applied: "
+                    f"{error} — you can provision manually in Catalyst Center, or turn off "
+                    f"'Provision after claim' in Settings to skip this step."
+                ),
+            )
+            return
+
+    _set_device_state(device_id, "success")
     await _notify_ise(job_id, device_id)
 
 
@@ -464,6 +553,7 @@ async def run_day0(
         job.day0_image_id = image_id
         catalyst_row = settings_store.get_service_settings(db, "catalyst")
         catalyst_secret = settings_store.decrypt_secret(catalyst_row)
+        provision = settings_store.provision_after_claim(db)
         # decrypt template secrets once (name -> plaintext) for global variables
         box = settings_store.get_secret_box()
         secret_values = {
@@ -499,7 +589,15 @@ async def run_day0(
     ) as client:
         await asyncio.gather(
             *(
-                _claim_one(client, job_id, device_id, payload, poll_interval, device_timeout)
+                _claim_one(
+                    client,
+                    job_id,
+                    device_id,
+                    payload,
+                    poll_interval,
+                    device_timeout,
+                    provision,
+                )
                 for device_id, payload in work
             ),
             return_exceptions=True,

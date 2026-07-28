@@ -135,6 +135,49 @@ def create_ccc_app() -> FastAPI:
         STATE.tasks[task_id] = {"polls": STATE.task_polls, "fail": STATE.dayn_task_fail}
         return {"response": {"taskId": task_id}, "version": "1.0"}
 
+    @app.get("/dna/intent/api/v1/network-device/ip-address/{ip}")
+    def network_device_by_ip(ip: str, request: Request) -> dict[str, Any]:
+        _check_token(request)
+        return {"response": {"id": f"uuid-{ip}", "managementIpAddress": ip}}
+
+    @app.put("/dna/intent/api/v1/network-device/brief")
+    async def set_role(request: Request) -> dict[str, Any]:
+        _check_token(request)
+        body = await request.json()
+        STATE.device_roles[str(body.get("id"))] = str(body.get("role"))
+        return {"response": {"taskId": "role-task"}}
+
+    @app.get("/dna/intent/api/v1/tag")
+    def list_tags(request: Request, name: str = "") -> dict[str, Any]:
+        _check_token(request)
+        return {"response": [{"id": f"tag-{name}", "name": name}] if name else []}
+
+    @app.post("/dna/intent/api/v1/tag/{tag_id}/member")
+    async def tag_member(tag_id: str, request: Request) -> dict[str, Any]:
+        _check_token(request)
+        body = await request.json()
+        for uuid in body.get("networkdevice") or []:
+            STATE.device_tags.setdefault(str(uuid), []).append(tag_id)
+        return {"response": {"taskId": "tag-task"}}
+
+    @app.post("/dna/intent/api/v1/sda/provisionDevices")
+    async def provision(request: Request) -> dict[str, Any]:
+        """Provision to site — this is what pushes the site's network settings."""
+        _check_token(request)
+        body = await request.json()
+        if not isinstance(body, list) or not body:
+            raise HTTPException(status_code=400, detail="provisionDevices expects a list")
+        for entry in body:
+            if not entry.get("siteId") or not entry.get("networkDeviceId"):
+                raise HTTPException(
+                    status_code=400, detail="provisionDevices needs siteId + networkDeviceId"
+                )
+            STATE.provisioned.append(str(entry["networkDeviceId"]))
+        STATE.task_counter += 1
+        task_id = f"task-{STATE.task_counter}"
+        STATE.tasks[task_id] = {"polls": 0, "fail": STATE.provision_fail}
+        return {"response": {"taskId": task_id}, "version": "1.0"}
+
     @app.get("/dna/intent/api/v1/task/{task_id}")
     def task(task_id: str, request: Request) -> dict[str, Any]:
         _check_token(request)

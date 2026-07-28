@@ -962,3 +962,31 @@ failure is logged and surfaced in Logs but never fails Day-0.
 are not yet confirmed against the live controller — hence the non-fatal
 handling. AAA/TACACS/RADIUS from network profiles is **not** applied by
 site-claim or template deploy; that needs a Provision step, still to be designed.
+
+## Provision to site: the missing AAA/RADIUS/DNS/DHCP step (v1.13.0) ✅
+
+A switch came out of a fully green onboarding with **no AAA config at all**.
+Cause: site-claim assigns the device to a site and runs the Day-0 template, and
+template deploy pushes template CLI — but neither applies the site's *network
+settings*. Only provisioning does. PnP Bridge never provisioned.
+
+`POST /dna/intent/api/v1/sda/provisionDevices` with `[{siteId,
+networkDeviceId}]` returns a task (Cisco 2.3.7 "Provision devices" API
+reference — despite the `sda` path segment this is the general provision API,
+not fabric-only). Runs after claim + inventory metadata, before the webhook.
+
+A provision failure marks the device **failed**, not success: without it the
+switch has no AAA/RADIUS/DNS/DHCP, which is exactly the gap that went unnoticed.
+`Settings → Provisioning → Provision to site after claim` (default on) is the
+escape hatch for controllers without the endpoint.
+
+Role/tag now also works when the Day-0 template declares no role variable:
+`netbox_role` is stored on the job device at match time and used as the
+fallback, so the CCC inventory role follows NetBox even with a bare template.
+
+- [x] `provision_devices` client + `_provision_to_site` + poll_task `label`
+- [x] `netbox_role` column + migration 0010 + matching/wizard wiring
+- [x] `provision_after_claim` flag (settings_store + API + Settings UI toggle)
+- [x] Mock CCC gained inventory/role/tag/provision routes + `provision_fail` knob
+- [x] Integration tests: settings pushed, failure not reported as success, toggle off
+- [x] 229 pytest / 39 vitest / 4 e2e green
