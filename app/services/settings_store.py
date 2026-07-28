@@ -110,3 +110,12 @@ def provision_after_claim(db: Session) -> bool:
     """
     row = db.get(AppSetting, "provision_after_claim")
     return row is None or row.value == "true"
+
+
+def http_trace(db: Session) -> bool:
+    """Whether to log raw request/response bodies for CCC and NetBox.
+
+    Off by default: it is a troubleshooting mode, and the volume is high.
+    """
+    row = db.get(AppSetting, "http_trace")
+    return row is not None and row.value == "true"

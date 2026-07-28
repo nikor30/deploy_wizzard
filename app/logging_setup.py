@@ -114,6 +114,23 @@ class DbLogHandler(logging.Handler):
             _log_queue.put(record)
 
 
+# Loggers switched to DEBUG by the HTTP-trace flag: every outbound request and
+# response to Catalyst Center / NetBox, bodies included. Kept off the root
+# logger so trace never drags in SQLAlchemy/uvicorn debug noise.
+TRACE_LOGGERS = ("app.clients",)
+
+
+def set_http_trace(enabled: bool) -> None:
+    """Turn raw request/response logging of the external APIs on or off.
+
+    A child logger's own level decides whether a record is emitted, so this
+    works regardless of the root level set from PNPB_LOG_LEVEL. Bodies still
+    pass through `redact()` — trace must never leak a token.
+    """
+    for name in TRACE_LOGGERS:
+        logging.getLogger(name).setLevel(logging.DEBUG if enabled else logging.NOTSET)
+
+
 def setup_logging(level: str = "INFO") -> None:
     global _sink_thread
     stream_handler = logging.StreamHandler(sys.stdout)

@@ -1019,3 +1019,26 @@ rejected. Needs the GUI capture to resolve.
 - [x] `auth_header`/`auth_token_encrypted` + migration 0011, client, API, UI
 - [x] `ccc_tag_name` sanitiser + tests
 - [x] 232 pytest / 39 vitest / 4 e2e green
+
+## HTTP trace + NetBox-driven access ports (v1.14.0) ✅
+
+**HTTP trace.** Settings → Debug → "HTTP trace" logs every request and response
+to CCC and NetBox — bodies included — to the Logs page, so a failing call can be
+captured and shared. Implemented by switching the `app.clients` logger to DEBUG
+(a child logger's own level decides emission, so it works whatever
+`PNPB_LOG_LEVEL` is). Bodies pass through the existing `redact()`, so a token
+never reaches the sink — covered by a test that asserts the auth token is absent
+from a traced failing `provisionDevices` call. Applies immediately, and is
+restored at startup so a capture survives a container restart.
+
+**Access ports come from NetBox.** `device.access_ports` is the physical,
+non-management, non-uplink interface list (uplink = cabled/connected per
+NetBox); virtual/LAG/bridge types are excluded. Aliases: `ACCESSPORTS`,
+`ACCESSPORTLIST`, `CLIENTPORTS`, plus `ACCESSPORTCOUNT`. This replaces guessing
+from the `x/0/y` name pattern, which catches an uplink on a front-panel port and
+misses a front-panel port on a module.
+
+- [x] `set_http_trace` + `http_trace` flag (store, API, startup restore, UI)
+- [x] `trace_http()` in base client, wired into catalyst + netbox
+- [x] `access_ports` / `access_port_count` in `build_device_context` + aliases
+- [x] 235 pytest / 39 vitest / 4 e2e green

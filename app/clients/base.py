@@ -54,3 +54,42 @@ async def get_with_retries(
         return last_response
     assert last_error is not None
     raise last_error
+
+
+# Response bodies land in the Logs page; cap them so one paginated list does
+# not fill the DB sink.
+TRACE_BODY_LIMIT = 4000
+
+
+def trace_http(
+    method: str, path: str, request_body: Any, response: httpx.Response, *, service: str
+) -> None:
+    """Raw request/response for the Logs page when HTTP trace is enabled.
+
+    Guarded by isEnabledFor so the (expensive) body decode only happens in
+    trace mode. Bodies go through `extra` and are redacted by the log handler,
+    so a token in a payload never reaches the sink.
+    """
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+    try:
+        body: Any = response.json()
+    except ValueError:
+        body = response.text[:TRACE_BODY_LIMIT]
+    if isinstance(body, str) and len(body) > TRACE_BODY_LIMIT:
+        body = body[:TRACE_BODY_LIMIT] + "…[truncated]"
+    logger.debug(
+        "%s %s %s -> HTTP %d",
+        service,
+        method,
+        path,
+        response.status_code,
+        extra={
+            "http_service": service,
+            "http_method": method,
+            "http_path": path,
+            "http_status": response.status_code,
+            "request_body": request_body,
+            "response_body": body,
+        },
+    )

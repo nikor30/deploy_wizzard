@@ -20,7 +20,7 @@ from app.api.stats import router as stats_router
 from app.api.wizard import router as wizard_router
 from app.config import get_settings
 from app.errors import ConfigurationError, PnPBridgeError
-from app.logging_setup import setup_logging
+from app.logging_setup import set_http_trace, setup_logging
 
 REPO_ROOT = Path(__file__).parent.parent
 # Populated by the container build (frontend/dist copied to app/static).
@@ -41,6 +41,13 @@ async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
     # so credentials can be added later via the web UI.
     settings.ensure_secret_key()
     run_migrations()
+    # Restore the stored HTTP-trace setting: a capture in progress must survive
+    # a container restart, or the operator loses the very call being chased.
+    from app.db.session import open_session
+    from app.services import settings_store
+
+    with open_session() as db:
+        set_http_trace(settings_store.http_trace(db))
     # Nightly log retention (default 90 days, configurable).
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 

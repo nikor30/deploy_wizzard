@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from app.clients.base import DEFAULT_TIMEOUT, get_with_retries
+from app.clients.base import DEFAULT_TIMEOUT, get_with_retries, trace_http
 from app.errors import NetBoxAuthError, NetBoxError, NetBoxNotFound
 
 logger = logging.getLogger(__name__)
@@ -59,6 +59,7 @@ class NetBoxClient:
             response = await get_with_retries(self._client, path, params=params)
         except httpx.TransportError as exc:
             raise NetBoxError(f"Cannot reach NetBox: {exc}") from exc
+        trace_http("GET", path, params, response, service="netbox")
         return self._check(response, path)
 
     async def _get_paginated(
@@ -162,5 +163,12 @@ class NetBoxClient:
             )
         except httpx.TransportError as exc:
             raise NetBoxError(f"Cannot reach NetBox: {exc}") from exc
+        trace_http(
+            "PATCH",
+            f"/api/dcim/devices/{device_id}/",
+            {"status": status},
+            response,
+            service="netbox",
+        )
         checked = self._check(response, f"device {device_id}")
         return dict(checked.json())
