@@ -170,6 +170,10 @@ class ServiceSettings(Base):
     base_url: Mapped[str | None] = mapped_column(String(512))
     username: Mapped[str | None] = mapped_column(String(256))
     secret_encrypted: Mapped[str | None] = mapped_column(String(2048))
+    # Optional bearer/API token sent as a request header (webhook receivers that
+    # authenticate the caller rather than verifying the HMAC signature).
+    auth_header: Mapped[str | None] = mapped_column(String(64))
+    auth_token_encrypted: Mapped[str | None] = mapped_column(String(2048))
     tls_verify: Mapped[bool] = mapped_column(Boolean, default=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(

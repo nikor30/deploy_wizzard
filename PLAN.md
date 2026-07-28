@@ -990,3 +990,32 @@ fallback, so the CCC inventory role follows NetBox even with a bare template.
 - [x] Mock CCC gained inventory/role/tag/provision routes + `provision_fail` knob
 - [x] Integration tests: settings pushed, failure not reported as success, toggle off
 - [x] 229 pytest / 39 vitest / 4 e2e green
+
+## Unblock Day-0, webhook auth token, CCC tag names (v1.13.1) ✅
+
+Three fixes from the first live run of v1.13.0.
+
+**Provisioning failure no longer blocks the wizard.** v1.13.0 marked the device
+`failed`, which left the operator at "Continue to Day-N (0 devices)" with no way
+forward. The claim itself succeeded, so the device now stays `success` and Day-N
+remains available — with a `Warning:` on the device stating the site's network
+settings were not applied. Loud, not fatal.
+
+**Webhook 401s.** The receiver authenticates the caller with a token; we only
+sent an HMAC signature, which proves the payload came from us but does not
+authenticate us — hence 401 no matter how well the body was signed. Settings →
+ISE Webhook gained an optional auth token (encrypted, masked on read) and header
+name, default `Authorization`, sent verbatim so `Bearer …` works.
+
+**CCC tag creation (NCGR10060).** CCC rejects group names outside letters,
+digits, space, dash, underscore and dot. NetBox role names are free text, so
+they are normalised before the tag is created.
+
+Still open: the provision call itself returns `NCSP11001: User intent validation
+failed`. The endpoint exists and accepts the request shape; the intent is
+rejected. Needs the GUI capture to resolve.
+
+- [x] Provision failure → `success` + warning; test updated
+- [x] `auth_header`/`auth_token_encrypted` + migration 0011, client, API, UI
+- [x] `ccc_tag_name` sanitiser + tests
+- [x] 232 pytest / 39 vitest / 4 e2e green

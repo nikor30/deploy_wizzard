@@ -158,7 +158,12 @@ async def retry_webhook_delivery(delivery_id: int, db: DbSession) -> WebhookDeli
     secret = settings_store.decrypt_secret(settings_row)
 
     result = await send_webhook(
-        settings_row.base_url, row.payload, secret=secret, tls_verify=settings_row.tls_verify
+        settings_row.base_url,
+        row.payload,
+        secret=secret,
+        tls_verify=settings_row.tls_verify,
+        auth_header=settings_row.auth_header,
+        auth_token=settings_store.decrypt_auth_token(settings_row),
     )
     row.attempts += result.attempts
     row.status = "delivered" if result.ok else "failed"

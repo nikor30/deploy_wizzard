@@ -17,6 +17,8 @@ import httpx
 from app.clients.base import DEFAULT_TIMEOUT
 
 SIGNATURE_HEADER = "X-PnPB-Signature"
+# Header used for the caller's token when none is configured explicitly.
+DEFAULT_AUTH_HEADER = "Authorization"
 MAX_RETRIES = 3
 BACKOFF_BASE_SECONDS = 1.0
 
@@ -42,11 +44,23 @@ async def send_webhook(
     secret: str | None = None,
     tls_verify: bool = True,
     request_timeout: float = DEFAULT_TIMEOUT,
+    auth_header: str | None = None,
+    auth_token: str | None = None,
 ) -> WebhookResult:
+    """POST the payload, signed with HMAC and/or carrying an auth token.
+
+    The HMAC signature proves the payload came from us; it does not
+    *authenticate* us to a receiver that wants a token (those answer 401 no
+    matter how well the body is signed). `auth_header`/`auth_token` cover that:
+    the token is sent verbatim as that header, so a receiver expecting
+    `Authorization: Bearer xyz` gets exactly that.
+    """
     body = json.dumps(payload, separators=(",", ":")).encode()
     headers = {"Content-Type": "application/json"}
     if secret:
         headers[SIGNATURE_HEADER] = sign_payload(secret, body)
+    if auth_token:
+        headers[auth_header or DEFAULT_AUTH_HEADER] = auth_token
 
     last_error: str | None = None
     status_code: int | None = None

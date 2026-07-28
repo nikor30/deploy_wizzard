@@ -5,6 +5,8 @@ export interface ServiceSettings {
   tls_verify: boolean
   enabled: boolean
   configured: boolean
+  auth_header: string | null
+  auth_token_masked: string | null
 }
 
 export interface Credentials {
@@ -19,6 +21,8 @@ export interface ServiceSettingsInput {
   secret?: string | null
   tls_verify?: boolean
   enabled?: boolean
+  auth_header?: string | null
+  auth_token?: string | null
 }
 
 export interface TestResult {

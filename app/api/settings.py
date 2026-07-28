@@ -37,6 +37,10 @@ class ServiceSettingsIn(BaseModel):
     secret: str | None = None
     tls_verify: bool = True
     enabled: bool = True
+    # Webhook receivers that authenticate the caller with a token rather than
+    # verifying the HMAC signature. Same convention as `secret`.
+    auth_header: str | None = None
+    auth_token: str | None = None
 
 
 class CredentialsIn(BaseModel):
@@ -52,6 +56,8 @@ class ServiceSettingsOut(BaseModel):
     tls_verify: bool = True
     enabled: bool = True
     configured: bool = False
+    auth_header: str | None = None
+    auth_token_masked: str | None = Field(default=None, description="e.g. ****abcd")
 
 
 class CredentialsOut(BaseModel):
@@ -76,6 +82,8 @@ def _to_out(row: ServiceSettings | None) -> ServiceSettingsOut:
         tls_verify=row.tls_verify,
         enabled=row.enabled,
         configured=bool(row.base_url),
+        auth_header=row.auth_header,
+        auth_token_masked=mask_secret(settings_store.decrypt_auth_token(row)),
     )
 
 
@@ -102,6 +110,8 @@ def put_credentials(payload: CredentialsIn, db: DbSession) -> CredentialsOut:
             secret=block.secret,
             tls_verify=block.tls_verify,
             enabled=block.enabled,
+            auth_header=block.auth_header,
+            auth_token=block.auth_token,
         )
         logger.info("Stored settings for %s", service)
     return get_credentials(db)

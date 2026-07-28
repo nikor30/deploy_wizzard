@@ -64,8 +64,12 @@ def upsert_service_settings(
     secret: str | None,
     tls_verify: bool,
     enabled: bool,
+    auth_header: str | None = None,
+    auth_token: str | None = None,
 ) -> ServiceSettings:
-    """Store settings for a service; `secret=None` keeps the existing secret."""
+    """Store settings for a service; `secret=None` keeps the existing secret.
+
+    `auth_token` follows the same convention: None keeps it, "" clears it."""
     if service not in SERVICES:
         raise ConfigurationError(f"Unknown service '{service}'.")
     row = get_service_settings(db, service)
@@ -78,6 +82,9 @@ def upsert_service_settings(
     row.enabled = enabled
     if secret is not None:
         row.secret_encrypted = get_secret_box().encrypt(secret) if secret else None
+    row.auth_header = auth_header or None
+    if auth_token is not None:
+        row.auth_token_encrypted = get_secret_box().encrypt(auth_token) if auth_token else None
     db.flush()
     return row
 
@@ -86,6 +93,12 @@ def decrypt_secret(row: ServiceSettings | None) -> str | None:
     if row is None or not row.secret_encrypted:
         return None
     return get_secret_box().decrypt(row.secret_encrypted)
+
+
+def decrypt_auth_token(row: ServiceSettings | None) -> str | None:
+    if row is None or not row.auth_token_encrypted:
+        return None
+    return get_secret_box().decrypt(row.auth_token_encrypted)
 
 
 def provision_after_claim(db: Session) -> bool:

@@ -52,6 +52,9 @@ interface FormBlock {
   secret_masked: string | null
   tls_verify: boolean
   enabled: boolean
+  auth_header: string
+  auth_token: string
+  auth_token_masked: string | null
 }
 
 type FormState = Record<ServiceKey, FormBlock>
@@ -67,6 +70,9 @@ function toForm(credentials: Credentials): FormState {
       secret_masked: svc.secret_masked,
       tls_verify: svc.tls_verify,
       enabled: svc.enabled,
+      auth_header: svc.auth_header ?? '',
+      auth_token: '',
+      auth_token_masked: svc.auth_token_masked,
     }
   }
   return blocks
@@ -80,6 +86,8 @@ function toInput(block: FormBlock): ServiceSettingsInput {
     secret: block.secret === '' ? null : block.secret,
     tls_verify: block.tls_verify,
     enabled: block.enabled,
+    auth_header: block.auth_header || null,
+    auth_token: block.auth_token === '' ? null : block.auth_token,
   }
 }
 
@@ -390,6 +398,27 @@ export default function SettingsCredentials() {
               placeholder={form.webhook.secret_masked ?? ''}
               onChange={(v) => update('webhook', { secret: v })}
             />
+            <Field
+              label="Auth token (optional)"
+              id="webhook-auth-token"
+              type="password"
+              value={form.webhook.auth_token}
+              placeholder={form.webhook.auth_token_masked ?? ''}
+              onChange={(v) => update('webhook', { auth_token: v })}
+            />
+            <Field
+              label="Auth header name (default: Authorization)"
+              id="webhook-auth-header"
+              value={form.webhook.auth_header}
+              placeholder="Authorization"
+              onChange={(v) => update('webhook', { auth_header: v })}
+            />
+            <p className="-mt-2 text-xs text-slate-500 dark:text-slate-400">
+              For receivers that authenticate the caller with a token. The shared secret above only{' '}
+              <em>signs</em> the payload &mdash; a receiver expecting a token answers 401 no matter
+              how well the body is signed. The value is sent verbatim, so include any prefix (e.g.{' '}
+              <code>Bearer abc123</code>).
+            </p>
             <Toggle
               label="Verify TLS certificate"
               id="webhook-tls"
