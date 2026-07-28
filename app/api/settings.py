@@ -18,6 +18,7 @@ from app.crypto import mask_secret
 from app.db.models import AppSetting, DayNMapping, ServiceSettings, TemplateSecret
 from app.db.session import get_db
 from app.errors import PnPBridgeError
+from app.logging_setup import set_http_trace
 from app.services import settings_store
 from app.services.connections import get_catalyst_client, get_netbox_client
 from app.services.dayn import load_device_context, resolve_variables
@@ -386,6 +387,10 @@ class AppFlags(BaseModel):
     # syslog) — claim and template deploy do not. On by default; turn it off if
     # the controller does not expose the provision API.
     provision_after_claim: bool = True
+    # Raw request/response logging for Catalyst Center and NetBox, so a failing
+    # call can be captured from the Logs page. Bodies are redacted; volume is
+    # high, so this is a troubleshooting mode and defaults to off.
+    http_trace: bool = False
 
     @field_validator("pnp_states")
     @classmethod
@@ -429,6 +434,7 @@ def get_flags(db: DbSession) -> AppFlags:
         day0_template_filter=template_filter(db, "day0"),
         dayn_template_filter=template_filter(db, "dayn"),
         provision_after_claim=settings_store.provision_after_claim(db),
+        http_trace=settings_store.http_trace(db),
     )
 
 
@@ -439,6 +445,9 @@ def put_flags(payload: AppFlags, db: DbSession) -> AppFlags:
     _set_setting(db, "day0_template_filter", ",".join(payload.day0_template_filter))
     _set_setting(db, "dayn_template_filter", ",".join(payload.dayn_template_filter))
     _set_setting(db, "provision_after_claim", "true" if payload.provision_after_claim else "false")
+    _set_setting(db, "http_trace", "true" if payload.http_trace else "false")
+    # applies immediately — no restart needed to capture the next call
+    set_http_trace(payload.http_trace)
     db.flush()
     logger.info(
         "Set app flags: debug=%s pnp_states=%s", payload.debug, ",".join(payload.pnp_states)

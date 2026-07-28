@@ -447,3 +447,30 @@ def test_partial_matches_still_used_when_no_exact_name_exists() -> None:
     ctx = build_device_context(ACCESS_DEVICE, CABLED, vlans, [])["device"]
     assert ctx["access_vlan"] is None  # ambiguous
     assert ctx["access_vlan_suggested"] == "200"  # lowest VID, editable
+
+
+def test_access_ports_are_the_uncabled_physical_ports() -> None:
+    """The port template used to guess access ports from the "x/0/y" name
+    pattern — which catches an uplink sitting on a front-panel port and misses
+    a front-panel port on a module. NetBox knows what is cabled."""
+    from app.services.dayn import build_device_context
+
+    interfaces = [
+        # cabled to another switch -> uplink, never an access port
+        {
+            "name": "TwoGigabitEthernet1/0/47",
+            "type": {"value": "2.5gbase-t"},
+            "connected_endpoints": [{"device": {"name": "core-01"}, "name": "Gi1/0/1"}],
+        },
+        {"name": "GigabitEthernet1/0/1", "type": {"value": "1000base-t"}},
+        {"name": "GigabitEthernet1/0/2", "type": {"value": "1000base-t"}},
+        # management port, SVI and the port-channel bundle are not access ports
+        {"name": "GigabitEthernet0/0", "type": {"value": "1000base-t"}, "mgmt_only": True},
+        {"name": "Vlan510", "type": {"value": "virtual"}},
+        {"name": "Port-channel1", "type": {"value": "lag"}},
+    ]
+    ctx = build_device_context({"id": 1, "name": "sw-1"}, interfaces=interfaces)["device"]
+
+    assert ctx["access_ports"] == "GigabitEthernet1/0/1,GigabitEthernet1/0/2"
+    assert ctx["access_port_count"] == "2"
+    assert ctx["uplink_ports"] == "TwoGigabitEthernet1/0/47"

@@ -15,7 +15,7 @@ from typing import Any
 
 import httpx
 
-from app.clients.base import DEFAULT_TIMEOUT, get_with_retries
+from app.clients.base import DEFAULT_TIMEOUT, get_with_retries, trace_http
 from app.errors import CatalystAuthError, CatalystError
 
 logger = logging.getLogger(__name__)
@@ -171,6 +171,7 @@ class CatalystCenterClient:
                     "Catalyst Center returned 401 even after a token refresh. "
                     "Check the credentials in Settings."
                 )
+        trace_http(method, path, json, response, service="catalyst")
         if response.status_code >= 400:
             detail = ""
             try:

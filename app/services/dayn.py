@@ -38,6 +38,10 @@ SECRET = "secret"
 SECRET_PREFIX = "secret."
 SECRET_MASK = "****"
 
+# NetBox interface types that are not switch ports and can never be access
+# ports: virtual SVIs, LAG bundles and bridges.
+NON_PHYSICAL_INTERFACE_TYPES: frozenset[str] = frozenset({"virtual", "lag", "bridge"})
+
 # Uplink port-channel description convention: UPL:<far-end switch name>.
 UPLINK_DESCRIPTION_PREFIX = "UPL:"
 # Access switches always use port-channel 1 for their uplink.
@@ -84,6 +88,10 @@ DAYN_ALIASES: dict[str, str] = {
     "SUPPORTCONTACT": "device.support_contact",
     "UPLINKSWITCH": "device.uplink_switch",
     "UPLINKPORTS": "device.uplink_ports",
+    "ACCESSPORTS": "device.access_ports",
+    "ACCESSPORTLIST": "device.access_ports",
+    "CLIENTPORTS": "device.access_ports",
+    "ACCESSPORTCOUNT": "device.access_port_count",
     "ARRVLANS": "device.site_vlans",
     "SITEVLANS": "device.site_vlans",
     # uplink / VLAN conventions (see build_device_context)
@@ -345,6 +353,23 @@ def build_device_context(
             }
         )
     ctx["uplinks"] = uplinks
+
+    # Access ports: the physical, non-management, non-uplink interfaces. The
+    # port template used to guess these from the "x/0/y" name pattern, which
+    # catches an uplink that happens to sit on a front-panel port and misses a
+    # front-panel port on a module. NetBox knows which ports are cabled to
+    # another device, so drive it from there instead.
+    uplink_names = {str(u["name"]) for u in uplinks if u.get("name")}
+    access_ports = [
+        str(iface["name"])
+        for iface in interfaces or []
+        if iface.get("name")
+        and not iface.get("mgmt_only")
+        and str(iface["name"]) not in uplink_names
+        and (iface.get("type") or {}).get("value") not in NON_PHYSICAL_INTERFACE_TYPES
+    ]
+    ctx["access_ports"] = ",".join(access_ports)
+    ctx["access_port_count"] = str(len(access_ports))
 
     # Flat Catalyst-Center Day-N values (match netbox_cc_dayn resolvers).
     port_names = [str(u["name"]) for u in uplinks if u.get("name")]

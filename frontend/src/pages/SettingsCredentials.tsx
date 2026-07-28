@@ -27,6 +27,7 @@ interface AppFlags {
   day0_template_filter?: string[]
   dayn_template_filter?: string[]
   provision_after_claim?: boolean
+  http_trace?: boolean
 }
 
 /** "onboard, webasto" -> ["onboard", "webasto"] (blanks dropped) */
@@ -177,6 +178,7 @@ export default function SettingsCredentials() {
   const [busy, setBusy] = useState<string | null>(null)
   const [debug, setDebug] = useState(false)
   const [provision, setProvision] = useState(true)
+  const [trace, setTrace] = useState(false)
   const [pnpStates, setPnpStates] = useState<string[]>(DEFAULT_PNP_STATES)
   // kept as the raw comma-separated text so typing a comma isn't fought with
   const [day0Filter, setDay0Filter] = useState('')
@@ -194,6 +196,7 @@ export default function SettingsCredentials() {
         setDay0Filter((f.day0_template_filter ?? []).join(', '))
         setDaynFilter((f.dayn_template_filter ?? []).join(', '))
         setProvision(f.provision_after_claim ?? true)
+        setTrace(f.http_trace ?? false)
       })
       .catch(() => setDebug(false))
   }, [])
@@ -208,6 +211,7 @@ export default function SettingsCredentials() {
         day0_template_filter: toWords(day0Filter),
         dayn_template_filter: toWords(daynFilter),
         provision_after_claim: provision,
+        http_trace: trace,
         ...next,
       }),
     })
@@ -220,6 +224,11 @@ export default function SettingsCredentials() {
   const toggleProvision = async (value: boolean) => {
     setProvision(value)
     await putFlags({ provision_after_claim: value }).catch(() => setProvision(!value))
+  }
+
+  const toggleTrace = async (value: boolean) => {
+    setTrace(value)
+    await putFlags({ http_trace: value }).catch(() => setTrace(!value))
   }
 
   const togglePnpState = async (state: string, checked: boolean) => {
@@ -533,6 +542,21 @@ export default function SettingsCredentials() {
               id="debug-flag"
               checked={debug}
               onChange={(v) => void toggleDebug(v)}
+            />
+          </div>
+          <p className="mt-6 text-sm text-slate-500 dark:text-slate-400">
+            HTTP trace logs every request and response to Catalyst Center and NetBox &mdash;
+            including the bodies &mdash; to the Logs page, so a failing call can be captured and
+            shared. Tokens and passwords are redacted. It is verbose: turn it on, reproduce the
+            problem, then turn it off again. The setting survives a restart, so a capture in
+            progress is not lost.
+          </p>
+          <div className="mt-3">
+            <Toggle
+              label="HTTP trace (raw request/response logging)"
+              id="http-trace"
+              checked={trace}
+              onChange={(v) => void toggleTrace(v)}
             />
           </div>
         </section>
