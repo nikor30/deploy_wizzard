@@ -156,6 +156,29 @@ describe('SettingsCredentials', () => {
     })
   })
 
+  it('saves the webhook TLS-verify toggle', async () => {
+    render(<SettingsCredentials />)
+    await screen.findByDisplayValue('https://ccc.example.com')
+
+    // the ISE helper may sit behind a self-signed cert
+    const tls = screen.getByLabelText('Verify TLS certificate', {
+      selector: '#webhook-tls',
+    })
+    expect(tls).toBeChecked()
+    await userEvent.click(tls)
+    await userEvent.click(screen.getByRole('button', { name: 'Save settings' }))
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          url === '/api/settings/credentials' && (init as RequestInit)?.method === 'PUT',
+      )
+      expect(putCall).toBeDefined()
+      const body = JSON.parse((putCall![1] as RequestInit).body as string)
+      expect(body.webhook.tls_verify).toBe(false)
+    })
+  })
+
   it('runs a connection test and shows the result', async () => {
     fetchMock.mockImplementation((url: string) =>
       Promise.resolve(

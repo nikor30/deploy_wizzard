@@ -367,3 +367,14 @@ def test_debug_flag_roundtrip(client: TestClient) -> None:
         "Onboarding",
         "Error",
     ]
+
+
+def test_netbox_gateway_beats_the_first_host_guess() -> None:
+    device = _device()
+    assert day0_builtins(device)["gateway"] == "172.20.10.1"  # first-host guess
+    assert day0_builtins(device, "172.20.10.254")["gateway"] == "172.20.10.254"
+    resolved = resolve_day0_variables(
+        ["DEFAULT_GATEWAY"], device, {"device": {}}, {}, gateway="172.20.10.254"
+    )
+    # still editable — the operator confirms the gateway either way
+    assert resolved["DEFAULT_GATEWAY"] == {"value": "172.20.10.254", "source": "manual"}

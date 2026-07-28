@@ -136,3 +136,50 @@ def test_mgmt_vlan_preselect_skips_ambiguous_or_absent_names() -> None:
     assert preselect_mgmt_vlan(ambiguous) is None
     assert preselect_mgmt_vlan([{"vid": 200, "name": "Data"}]) is None
     assert preselect_mgmt_vlan([]) is None
+
+
+# --- VLAN gateway from NetBox IPAM -------------------------------------------
+
+
+class _FakeNetBox:
+    def __init__(self, addresses: list[dict[str, object]]) -> None:
+        self._addresses = addresses
+
+    async def get_vlan_ip_addresses(self, vlan_id: int) -> list[dict[str, object]]:
+        return self._addresses
+
+
+async def test_gateway_taken_from_the_ip_named_gateway() -> None:
+    from app.services.matching import resolve_vlan_gateway
+
+    client = _FakeNetBox(
+        [
+            {"address": "172.20.10.145/24", "dns_name": "ssto145cis"},
+            {"address": "172.20.10.1/24", "dns_name": "sto-gateway.web-int.net"},
+        ]
+    )
+    assert await resolve_vlan_gateway(client, 510) == "172.20.10.1"  # type: ignore[arg-type]
+
+
+async def test_gateway_also_matched_from_the_description() -> None:
+    from app.services.matching import resolve_vlan_gateway
+
+    client = _FakeNetBox([{"address": "10.0.0.254/24", "description": "Default Gateway"}])
+    assert await resolve_vlan_gateway(client, 510) == "10.0.0.254"  # type: ignore[arg-type]
+
+
+async def test_no_or_ambiguous_gateway_falls_back_to_the_subnet_guess() -> None:
+    """A wrong default gateway strands the device, so two candidates mean the
+    caller keeps its first-host guess instead."""
+    from app.services.matching import resolve_vlan_gateway
+
+    none_named = _FakeNetBox([{"address": "10.0.0.5/24", "dns_name": "host"}])
+    assert await resolve_vlan_gateway(none_named, 510) is None  # type: ignore[arg-type]
+
+    ambiguous = _FakeNetBox(
+        [
+            {"address": "10.0.0.1/24", "dns_name": "gateway-a"},
+            {"address": "10.0.0.2/24", "dns_name": "gateway-b"},
+        ]
+    )
+    assert await resolve_vlan_gateway(ambiguous, 510) is None  # type: ignore[arg-type]

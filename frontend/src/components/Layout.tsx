@@ -7,7 +7,7 @@ const navigation = [
 ]
 
 const settingsNav = [
-  { to: '/settings/credentials', label: 'Credentials' },
+  { to: '/settings/credentials', label: 'Settings' },
   { to: '/settings/mapping', label: 'Site Mapping' },
   { to: '/settings/dayn', label: 'Day-N Variables' },
 ]

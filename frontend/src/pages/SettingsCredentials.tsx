@@ -382,6 +382,16 @@ export default function SettingsCredentials() {
               onChange={(v) => update('webhook', { secret: v })}
             />
             <Toggle
+              label="Verify TLS certificate"
+              id="webhook-tls"
+              checked={form.webhook.tls_verify}
+              onChange={(v) => update('webhook', { tls_verify: v })}
+            />
+            <p className="-mt-2 text-xs text-slate-500 dark:text-slate-400">
+              Turn off only for an ISE helper behind a self-signed or private-CA certificate
+              (delivery then fails with “certificate verify failed”).
+            </p>
+            <Toggle
               label="Enabled"
               id="webhook-enabled"
               checked={form.webhook.enabled}
