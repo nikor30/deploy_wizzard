@@ -300,9 +300,18 @@ async def _notify_ise(job_id: int, device_id: int) -> None:
         url = settings_row.base_url
         secret = settings_store.decrypt_secret(settings_row)
         tls_verify = settings_row.tls_verify
+        auth_header = settings_row.auth_header
+        auth_token = settings_store.decrypt_auth_token(settings_row)
         payload = _webhook_payload(job_id, device)
 
-    result = await send_webhook(url, payload, secret=secret, tls_verify=tls_verify)
+    result = await send_webhook(
+        url,
+        payload,
+        secret=secret,
+        tls_verify=tls_verify,
+        auth_header=auth_header,
+        auth_token=auth_token,
+    )
     with open_session() as db:
         db.add(
             WebhookDelivery(
@@ -333,6 +342,24 @@ CCC_ROLES: tuple[tuple[str, str], ...] = (
 
 # day0_variables keys that carry the switch role (see DAY0_ALIASES).
 ROLE_VARIABLES: tuple[str, ...] = ("SWITCHTYPE", "SWITCHTYP", "DEVICEROLE", "ROLE")
+
+# CCC tag names are group names: it rejects anything outside letters, digits,
+# space, dash, underscore and dot with NCGR10060 ("The specified group name is
+# invalid"). NetBox role names are free text, so normalise before creating.
+_TAG_SAFE = set(" -_.")
+
+
+def ccc_tag_name(role_name: str) -> str | None:
+    """A CCC-acceptable tag name for a NetBox role, or None if nothing is left."""
+    cleaned = "".join(c if c.isalnum() or c in _TAG_SAFE else "_" for c in role_name).strip()
+    # collapse the runs of underscores a messy name can leave behind
+    while "__" in cleaned:
+        cleaned = cleaned.replace("__", "_")
+    cleaned = cleaned.strip(" -_.")
+    # a name of nothing but separators is not a name
+    if not any(c.isalnum() for c in cleaned):
+        return None
+    return cleaned[:128]
 
 
 def device_role_name(
@@ -391,11 +418,13 @@ async def _apply_inventory_metadata(
             return
         if role:
             await client.set_device_role(uuid, role)
-        tag_id = await client.ensure_tag(role_name)
-        await client.tag_device(tag_id, uuid)
+        tag_name = ccc_tag_name(role_name)
+        if tag_name:
+            tag_id = await client.ensure_tag(tag_name)
+            await client.tag_device(tag_id, uuid)
         logger.info(
             "Applied CCC inventory role and tag",
-            extra={"job_id": job_id, "serial": serial, "role": role, "tag": role_name},
+            extra={"job_id": job_id, "serial": serial, "role": role, "tag": tag_name},
         )
     except Exception as exc:  # non-fatal: onboarding already succeeded
         logger.warning(
@@ -499,38 +528,43 @@ async def _claim_one(
 
     await _apply_inventory_metadata(client, job_id, device_id)
 
+    provision_warning: str | None = None
     if provision:
         try:
-            error = await _provision_to_site(
+            provision_warning = await _provision_to_site(
                 client, job_id, device_id, poll_interval, device_timeout
             )
         except PnPBridgeError as exc:
-            error = exc.message
+            provision_warning = exc.message
         except Exception as exc:  # per-device isolation
             logger.exception("Unexpected provisioning error", extra={"job_id": job_id})
-            error = str(exc)
-        if error:
-            # The claim itself worked, so say so — but do NOT call this a
-            # success: without provisioning the switch has no AAA/RADIUS/DNS/
-            # DHCP from its site, which is precisely the silent gap this step
-            # exists to close.
+            provision_warning = str(exc)
+        if provision_warning:
             logger.error(
                 "Claim succeeded but provisioning failed",
-                extra={"job_id": job_id, "ccc_device_id": ccc_device_id, "error": error},
+                extra={
+                    "job_id": job_id,
+                    "ccc_device_id": ccc_device_id,
+                    "error": provision_warning,
+                },
             )
-            _set_device_state(
-                device_id,
-                "failed",
-                error=(
-                    f"Day-0 claim succeeded, but provisioning the device to its site failed, "
-                    f"so the site's network settings (AAA/RADIUS/DNS/DHCP) were not applied: "
-                    f"{error} — you can provision manually in Catalyst Center, or turn off "
-                    f"'Provision after claim' in Settings to skip this step."
-                ),
-            )
-            return
 
-    _set_device_state(device_id, "success")
+    # The claim itself worked, so the device stays claimable for Day-N — a
+    # failed provision must not strand the whole batch at "0 devices". It is
+    # recorded as a warning instead, because a switch without its site's
+    # AAA/RADIUS/DNS/DHCP is not a silent success either.
+    _set_device_state(
+        device_id,
+        "success",
+        error=(
+            "Warning: the Day-0 claim succeeded, but provisioning the device to its site "
+            f"failed, so the site's network settings (AAA/RADIUS/DNS/DHCP) were NOT applied: "
+            f"{provision_warning} — provision it manually in Catalyst Center, or turn off "
+            "'Provision to site after claim' in Settings to stop attempting it."
+            if provision_warning
+            else None
+        ),
+    )
     await _notify_ise(job_id, device_id)
 
 

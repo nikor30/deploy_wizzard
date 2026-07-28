@@ -241,20 +241,21 @@ def test_dayn_preview_by_serial_resolves_netbox_derived_values(
     assert values["support_contact"] == "Ladislav Fekete"
 
 
-def test_provision_failure_is_not_reported_as_a_successful_day0(
+def test_provision_failure_warns_but_still_allows_day_n(
     configured_client: TestClient, mock: httpx.Client
 ) -> None:
-    """Without provisioning the switch has no AAA/RADIUS/DNS/DHCP from its
-    site. Calling that a success is what let the gap go unnoticed."""
+    """A failed provision must not strand the batch at "0 devices" — the claim
+    worked, so Day-N stays available. It is loud, not fatal: a switch without
+    its site's AAA/RADIUS/DNS/DHCP is not a silent success either."""
     client = configured_client
     mock.post("/__mock__/config", json={"provision_fail": True})
     job = _create_matched_job(client)
     client.post(f"/api/wizard/jobs/{job['id']}/claim", json={"config_id": "tpl-day0", **FAST})
 
     job = client.get(f"/api/wizard/jobs/{job['id']}").json()
-    assert all(d["state"] == "failed" for d in job["devices"])
+    assert all(d["state"] == "success" for d in job["devices"]), "claim itself succeeded"
     error = job["devices"][0]["error"]
-    assert "claim succeeded" in error.lower()
+    assert error.startswith("Warning:")
     assert "AAA/RADIUS/DNS/DHCP" in error
 
 

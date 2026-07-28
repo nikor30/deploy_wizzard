@@ -248,3 +248,15 @@ async def test_inventory_role_and_tag_failure_never_fails_day0(client: TestClien
         )
         async with CatalystCenterClient(CCC, "admin", "pw") as ccc:
             await _apply_inventory_metadata(ccc, 1, device_id)  # must not raise
+
+
+def test_ccc_tag_name_strips_what_ccc_rejects_as_a_group_name() -> None:
+    """CCC answers NCGR10060 ("The specified group name is invalid") for names
+    outside letters/digits/space/dash/underscore/dot."""
+    from app.services.day0 import ccc_tag_name
+
+    assert ccc_tag_name("Access") == "Access"
+    assert ccc_tag_name("Access Switch") == "Access Switch"
+    assert ccc_tag_name("access/switch") == "access_switch"
+    assert ccc_tag_name("a//b") == "a_b"  # runs collapse
+    assert ccc_tag_name("///") is None  # nothing usable left
