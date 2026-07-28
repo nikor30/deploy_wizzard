@@ -913,3 +913,21 @@ in `#MODE_ENABLE` + `#INTERACTIVE`:
 
 - [x] `INTERACTIVE_HINT` updated + test asserts the convert-to/EXEC sequence
 - [x] 223 pytest / 39 vitest / 4 e2e green
+
+## Day-N: the C3PL prompt belongs on the control class (v1.11.2) ✅
+
+`authentication convert-to new-style` in `#MODE_ENABLE` also failed with
+`% Invalid input detected` — it is not accepted in EXEC mode either. Cisco's
+17.14 *Configuring Identity Control Policies* guide states the confirmation is
+raised by the **first explicit IBNS command, "for example when configuring a
+control class or control policy"** — i.e. by `class-map type control subscriber`
+itself. No separate conversion command exists or is needed.
+
+`INTERACTIVE_HINT` now recommends answering the prompt on the first control
+class and explicitly warns off both previously suggested commands
+(`authentication display` = privileged-EXEC only; `authentication convert-to` =
+rejected in EXEC).
+
+- [x] `INTERACTIVE_HINT` rewritten + test asserts the control-class sequence
+- [x] Corrected `IT_DayN_Port_Template` shared with the user
+- [x] 223 pytest / 39 vitest / 4 e2e green
