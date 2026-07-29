@@ -25,6 +25,10 @@ class Job(Base):
     day0_config_id: Mapped[str | None] = mapped_column(String(64))
     day0_image_id: Mapped[str | None] = mapped_column(String(64))
     dayn_template_id: Mapped[str | None] = mapped_column(String(64))
+    # Optional second Day-N stage: port/uplink config, deployed after the base
+    # stage so a push that trips over an interface cannot take the VLAN and
+    # banner templates down with it.
+    dayn2_template_id: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
@@ -63,6 +67,7 @@ class JobDevice(Base):
     day0_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     day0_variables: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     dayn_variables: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    dayn2_variables: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     dayn_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     dayn_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

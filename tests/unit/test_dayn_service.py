@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 import app.clients.webhook as webhook_module
+import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
@@ -433,3 +434,138 @@ def test_interactive_prompt_failure_gets_an_actionable_hint() -> None:
     # an ordinary CLI rejection gets no interactive hint
     assert interactive_prompt_hint("Invalid CLI - Current output : bogus command") == ""
     assert interactive_prompt_hint("Device unreachable") == ""
+
+
+# --- staged Day-N: base templates first, ports/uplinks second -----------------
+
+
+def test_a_failing_member_no_longer_takes_the_other_templates_down(
+    client: TestClient,
+) -> None:
+    """The port template tripping over an interface used to abort the composite,
+    so the VLAN and banner members never ran and the switch got neither."""
+    job_id = _run_day0(client)
+    _store_dayn_mapping(client)
+    _prepare(client, job_id)
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="testserver").pass_through()
+        _mock_ccc(respx_mock)
+        respx_mock.get(TEMPLATE_URL).respond(
+            200,
+            json={
+                "templateId": "tmpl-N",
+                "composite": True,
+                "containingTemplates": [
+                    {"id": "ports", "templateParams": [{"parameterName": "SNMP_LOCATION"}]},
+                    {"id": "vlans", "templateParams": [{"parameterName": "CONTACT"}]},
+                    {"id": "banner", "templateParams": [{"parameterName": "CONTACT"}]},
+                ],
+            },
+        )
+        deploy = respx_mock.post(DEPLOY_URL).respond(200, json={"response": {"taskId": "task-1"}})
+        # the first member fails, the rest succeed
+        respx_mock.get(TASK_URL).mock(
+            side_effect=[
+                httpx.Response(200, json={"response": {"isError": True, "failureReason": "boom"}}),
+                httpx.Response(200, json={"response": {"isError": False, "endTime": 1}}),
+                httpx.Response(200, json={"response": {"isError": False, "endTime": 1}}),
+            ]
+            * 2
+        )
+        _deploy(client, job_id, respx_mock)
+
+    # all three members were attempted for the first device, not just the first
+    assert deploy.call_count >= 3
+    job = client.get(f"/api/wizard/jobs/{job_id}").json()
+    error = job["devices"][0]["error"]
+    assert "1 of 3 templates failed" in error
+    assert "the others were applied" in error
+
+
+def test_stage_one_can_defer_netbox_activation_for_a_ports_stage(
+    client: TestClient,
+) -> None:
+    """§11: the source of truth is only touched when the device is finished, so
+    a base stage that will be followed by ports must not activate."""
+    job_id = _run_day0(client)
+    _store_dayn_mapping(client)
+    _prepare(client, job_id)
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="testserver").pass_through()
+        _mock_ccc(respx_mock)
+        _mock_template(respx_mock)
+        respx_mock.post(DEPLOY_URL).respond(200, json={"response": {"taskId": "task-1"}})
+        respx_mock.get(TASK_URL).respond(200, json={"response": {"isError": False, "endTime": 1}})
+        patch = respx_mock.patch(f"{NETBOX}/api/dcim/devices/1/").respond(200, json={"id": 1})
+        client.post(
+            f"/api/wizard/jobs/{job_id}/dayn/deploy",
+            json={
+                "template_id": "tmpl-N",
+                "manual": _manual_for_all(client, job_id),
+                "poll_interval": 0,
+                "task_timeout": 5,
+                "activate": False,
+            },
+        )
+
+    assert not patch.called, "NetBox must not be activated while a stage is outstanding"
+    job = client.get(f"/api/wizard/jobs/{job_id}").json()
+    assert all(d["state"] == "dayn_complete" for d in job["devices"])
+
+
+def test_ports_stage_deploys_its_own_template_and_activates(client: TestClient) -> None:
+    job_id = _run_day0(client)
+    _store_dayn_mapping(client)
+    _prepare(client, job_id)
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="testserver").pass_through()
+        _mock_ccc(respx_mock)
+        _mock_template(respx_mock)
+        respx_mock.post(DEPLOY_URL).respond(200, json={"response": {"taskId": "task-1"}})
+        respx_mock.get(TASK_URL).respond(200, json={"response": {"isError": False, "endTime": 1}})
+        respx_mock.patch(f"{NETBOX}/api/dcim/devices/1/").respond(200, json={"id": 1})
+        respx_mock.patch(f"{NETBOX}/api/dcim/devices/2/").respond(200, json={"id": 2})
+        client.post(
+            f"/api/wizard/jobs/{job_id}/dayn/deploy",
+            json={
+                "template_id": "tmpl-N",
+                "manual": _manual_for_all(client, job_id),
+                "poll_interval": 0,
+                "task_timeout": 5,
+                "activate": False,
+            },
+        )
+
+    # stage 2: resolve against its own template, then deploy
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="testserver").pass_through()
+        _mock_ccc(respx_mock)
+        _mock_prepare(respx_mock)
+        prepared = client.post(
+            f"/api/wizard/jobs/{job_id}/dayn2/prepare", json={"template_id": "tmpl-N"}
+        )
+    assert prepared.status_code == 200, prepared.text
+    assert prepared.json()["devices"][0]["dayn2_variables"]
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="testserver").pass_through()
+        _mock_ccc(respx_mock)
+        _mock_template(respx_mock)
+        deploy = respx_mock.post(DEPLOY_URL).respond(200, json={"response": {"taskId": "task-1"}})
+        respx_mock.get(TASK_URL).respond(200, json={"response": {"isError": False, "endTime": 1}})
+        patch = respx_mock.patch(f"{NETBOX}/api/dcim/devices/1/").respond(200, json={"id": 1})
+        respx_mock.patch(f"{NETBOX}/api/dcim/devices/2/").respond(200, json={"id": 2})
+        response = client.post(
+            f"/api/wizard/jobs/{job_id}/dayn2/deploy",
+            json={
+                "template_id": "tmpl-N",
+                "manual": _manual_for_all(client, job_id),
+                "poll_interval": 0,
+                "task_timeout": 5,
+            },
+        )
+    assert response.status_code == 200, response.text
+    assert deploy.called
+    assert patch.called, "the last stage activates NetBox"
+    job = client.get(f"/api/wizard/jobs/{job_id}").json()
+    assert all(d["state"] == "completed" for d in job["devices"])

@@ -82,6 +82,7 @@ class JobDeviceOut(BaseModel):
     error: str | None
     day0_variables: dict[str, dict[str, Any]] | None
     dayn_variables: dict[str, dict[str, Any]] | None
+    dayn2_variables: dict[str, dict[str, Any]] | None = None
 
 
 class JobOut(BaseModel):
@@ -117,6 +118,7 @@ def _device_out(device: JobDevice) -> JobDeviceOut:
         error=device.error,
         day0_variables=device.day0_variables,
         dayn_variables=device.dayn_variables,
+        dayn2_variables=device.dayn2_variables,
     )
 
 
@@ -454,18 +456,41 @@ class DayNDeployRequest(BaseModel):
     manual: dict[int, dict[str, str]] = {}
     poll_interval: float | None = None
     task_timeout: float | None = None
+    # False leaves NetBox untouched because a further stage will follow — the
+    # device is not finished, and §11 forbids marking it active early.
+    activate: bool = True
 
 
-def _dayn_eligible(job: Job) -> list[JobDevice]:
-    """Day-N applies to devices that finished Day-0 successfully."""
-    return [d for d in job.devices if d.state in ("success", "dayn_failed", "activate_failed")]
+def _dayn_eligible(job: Job, stage: int = 1) -> list[JobDevice]:
+    """Devices a Day-N stage applies to.
+
+    Stage 1 needs a successful Day-0. Stage 2 (ports/uplinks) additionally
+    accepts devices that finished stage 1 (`dayn_complete`) or already ran a
+    stage and are being retried.
+    """
+    states = {"success", "dayn_failed", "activate_failed"}
+    if stage == 2:
+        states |= {"dayn_complete", "completed"}
+    return [d for d in job.devices if d.state in states]
 
 
 @router.post("/jobs/{job_id}/dayn/prepare")
 async def prepare_dayn(job_id: int, payload: DayNPrepareRequest, db: DbSession) -> JobOut:
     """Introspect template variables and resolve them from NetBox per device."""
+    return await _prepare_stage(job_id, payload, db, stage=1)
+
+
+@router.post("/jobs/{job_id}/dayn2/prepare")
+async def prepare_dayn2(job_id: int, payload: DayNPrepareRequest, db: DbSession) -> JobOut:
+    """Same as Day-N prepare, for the optional port/uplink stage."""
+    return await _prepare_stage(job_id, payload, db, stage=2)
+
+
+async def _prepare_stage(
+    job_id: int, payload: DayNPrepareRequest, db: DbSession, *, stage: int
+) -> JobOut:
     job = _get_job(db, job_id)
-    devices = _dayn_eligible(job)
+    devices = _dayn_eligible(job, stage)
     if not devices:
         raise HTTPException(status_code=422, detail="No Day-0-successful devices in this job.")
 
@@ -482,10 +507,15 @@ async def prepare_dayn(job_id: int, payload: DayNPrepareRequest, db: DbSession) 
             if device.netbox_device_id is not None:
                 netbox_device = await netbox.get_device(device.netbox_device_id)
                 context = await load_device_context(netbox, netbox_device, access_ports_from)
-            device.dayn_variables = resolve_variables(
-                variables, mappings, context, secret_names=secret_names
-            )
-    job.dayn_template_id = payload.template_id
+            resolved = resolve_variables(variables, mappings, context, secret_names=secret_names)
+            if stage == 1:
+                device.dayn_variables = resolved
+            else:
+                device.dayn2_variables = resolved
+    if stage == 1:
+        job.dayn_template_id = payload.template_id
+    else:
+        job.dayn2_template_id = payload.template_id
     db.flush()
     return _job_out(job)
 
@@ -495,16 +525,37 @@ def deploy_dayn(
     job_id: int, payload: DayNDeployRequest, background: BackgroundTasks, db: DbSession
 ) -> JobOut:
     """Start Day-N deployment; manual values must cover all unresolved variables."""
+    return _deploy_stage(job_id, payload, background, db, stage=1)
+
+
+@router.post("/jobs/{job_id}/dayn2/deploy")
+def deploy_dayn2(
+    job_id: int, payload: DayNDeployRequest, background: BackgroundTasks, db: DbSession
+) -> JobOut:
+    """Deploy the port/uplink stage. Always activates NetBox on success — it is
+    the last stage."""
+    payload.activate = True
+    return _deploy_stage(job_id, payload, background, db, stage=2)
+
+
+def _deploy_stage(
+    job_id: int,
+    payload: DayNDeployRequest,
+    background: BackgroundTasks,
+    db: DbSession,
+    *,
+    stage: int,
+) -> JobOut:
     job = _get_job(db, job_id)
     if job.status.endswith("_running"):
         raise HTTPException(status_code=409, detail="A job phase is already running.")
-    devices = _dayn_eligible(job)
+    devices = _dayn_eligible(job, stage)
     if not devices:
         raise HTTPException(status_code=422, detail="No Day-0-successful devices in this job.")
 
     device_params: dict[int, dict[str, str]] = {}
     for device in devices:
-        resolved = device.dayn_variables or {}
+        resolved = (device.dayn_variables if stage == 1 else device.dayn2_variables) or {}
         manual_values = payload.manual.get(device.id, {})
         params: dict[str, str] = {}
         missing: list[str] = []
@@ -542,7 +593,7 @@ def deploy_dayn(
         device_params[device.id] = params
 
     job.status = "dayn_running"
-    job.current_step = 4
+    job.current_step = 4 if stage == 1 else 5
     for device in devices:
         device.state = "dayn_queued"
         device.error = None
@@ -554,7 +605,13 @@ def deploy_dayn(
     if payload.task_timeout is not None:
         kwargs["task_timeout"] = payload.task_timeout
     background.add_task(
-        run_dayn, job_id, template_id=payload.template_id, device_params=device_params, **kwargs
+        run_dayn,
+        job_id,
+        template_id=payload.template_id,
+        device_params=device_params,
+        stage=stage,
+        activate=payload.activate,
+        **kwargs,
     )
     logger.info("Day-N started", extra={"job_id": job_id, "devices": len(device_params)})
     return _job_out(job)
