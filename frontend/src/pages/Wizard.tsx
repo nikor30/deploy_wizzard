@@ -34,15 +34,18 @@ interface JobDevice {
     string,
     { value: string | null; source: string; choices?: string[]; claim_value?: string }
   > | null
-  dayn_variables: Record<
-    string,
-    {
-      value: string | null
-      source: 'netbox' | 'mapped' | 'manual' | 'secret'
-      optional?: boolean
-    }
-  > | null
+  dayn_variables: DayNVariables | null
+  dayn2_variables?: DayNVariables | null
 }
+
+type DayNVariables = Record<
+  string,
+  {
+    value: string | null
+    source: 'netbox' | 'mapped' | 'manual' | 'secret'
+    optional?: boolean
+  }
+>
 
 interface Job {
   id: number
@@ -51,6 +54,7 @@ interface Job {
   created_at: string
   device_count: number
   dayn_template_id?: string | null
+  dayn2_template_id?: string | null
   devices: JobDevice[]
 }
 
@@ -69,7 +73,14 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
-const STEPS = ['Select devices', 'Match with NetBox', 'Day-0 claim', 'Day-N provision', 'Finalize']
+const STEPS = [
+  'Select devices',
+  'Match with NetBox',
+  'Day-0 claim',
+  'Day-N provision',
+  'Ports & uplinks',
+  'Finalize',
+]
 
 function Stepper({ active }: { active: number }) {
   return (
@@ -809,12 +820,29 @@ function Day0View({
 
 const JOB_DONE_STATUSES = ['completed', 'partial_success', 'dayn_failed']
 
-function DayNView({ job: initialJob }: { job: Job }) {
+/**
+ * Day-N, in one or two stages. Stage 1 is the base config (VLANs, banner);
+ * stage 2 is the optional port/uplink pass, kept separate so a push that trips
+ * over an interface cannot take the base templates down with it. Only the last
+ * stage run activates the device in NetBox (CLAUDE.md §11).
+ */
+function DayNView({
+  job: initialJob,
+  stage = 1,
+  onContinue,
+}: {
+  job: Job
+  stage?: 1 | 2
+  onContinue?: (job: Job) => void
+}) {
+  const path = stage === 1 ? 'dayn' : 'dayn2'
   const [job, setJob] = useState<Job>(initialJob)
   const [templates, setTemplates] = useState<Day0Template[] | null>(null)
-  const [templateId, setTemplateId] = useState(initialJob.dayn_template_id ?? '')
+  const [templateId, setTemplateId] = useState(
+    (stage === 1 ? initialJob.dayn_template_id : initialJob.dayn2_template_id) ?? '',
+  )
   const [prepared, setPrepared] = useState(
-    initialJob.devices.some((d) => d.dayn_variables !== null),
+    initialJob.devices.some((d) => (stage === 1 ? d.dayn_variables : d.dayn2_variables) !== null),
   )
   const [manual, setManual] = useState<Record<number, Record<string, string>>>({})
   const [error, setError] = useState<string | null>(null)
@@ -837,6 +865,7 @@ function DayNView({ job: initialJob }: { job: Job }) {
       'dayn_queued',
       'dayn_deploying',
       'completed',
+      'dayn_complete',
     ].includes(d.state),
   )
   const done = JOB_DONE_STATUSES.includes(job.status)
@@ -845,7 +874,7 @@ function DayNView({ job: initialJob }: { job: Job }) {
     setBusy(true)
     setError(null)
     try {
-      const updated = await fetchJson<Job>(`/api/wizard/jobs/${job.id}/dayn/prepare`, {
+      const updated = await fetchJson<Job>(`/api/wizard/jobs/${job.id}/${path}/prepare`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ template_id: templateId }),
@@ -859,14 +888,15 @@ function DayNView({ job: initialJob }: { job: Job }) {
     }
   }
 
-  const deploy = async () => {
+  const deploy = async (withPorts = false) => {
     setBusy(true)
     setError(null)
     try {
-      const started = await fetchJson<Job>(`/api/wizard/jobs/${job.id}/dayn/deploy`, {
+      const started = await fetchJson<Job>(`/api/wizard/jobs/${job.id}/${path}/deploy`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ template_id: templateId, manual }),
+        // stage 1 defers activation only when a ports stage will follow
+        body: JSON.stringify({ template_id: templateId, manual, activate: !withPorts }),
       })
       setJob(started)
       setRunning(true)
@@ -942,7 +972,16 @@ function DayNView({ job: initialJob }: { job: Job }) {
           aria-label="Day-N configuration"
           className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
         >
-          <h2 className="font-semibold">Day-N template</h2>
+          <h2 className="font-semibold">
+            {stage === 1 ? 'Day-N template' : 'Port & uplink template'}
+          </h2>
+          {stage === 2 && (
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Deployed after the base config, so a push that trips over an interface cannot take the
+              VLAN and banner templates down with it. This stage activates the device in NetBox when
+              it succeeds.
+            </p>
+          )}
           <div className="mt-3 flex flex-wrap items-end gap-4">
             <label className="block">
               <span className="text-xs text-slate-400 uppercase">Template</span>
@@ -1036,7 +1075,17 @@ function DayNView({ job: initialJob }: { job: Job }) {
             disabled={!manualComplete || busy}
             onClick={() => void deploy()}
           >
-            Deploy Day-N ({eligible.length} device(s))
+            {stage === 1 ? 'Deploy Day-N' : 'Deploy ports & uplinks'} ({eligible.length} device(s))
+          </button>
+        )}
+        {!running && prepared && stage === 1 && (
+          <button
+            type="button"
+            className={buttonSecondary}
+            disabled={!manualComplete || busy}
+            onClick={() => void deploy(true)}
+          >
+            Deploy, then configure ports
           </button>
         )}
         {!running && prepared && !manualComplete && (
@@ -1045,22 +1094,37 @@ function DayNView({ job: initialJob }: { job: Job }) {
           </span>
         )}
         {running && <span className="text-sm text-sky-600 dark:text-sky-400">Deploying…</span>}
+        {!running && stage === 1 && job.devices.some((d) => d.state === 'dayn_complete') && (
+          <button type="button" className={buttonPrimary} onClick={() => onContinue?.(job)}>
+            Continue to ports &amp; uplinks
+          </button>
+        )}
       </div>
     </div>
   )
 }
 
-const STEP_FOR_VIEW: Record<string, number> = { start: 1, select: 1, match: 2, day0: 3, dayn: 4 }
+const STEP_FOR_VIEW: Record<string, number> = {
+  start: 1,
+  select: 1,
+  match: 2,
+  day0: 3,
+  dayn: 4,
+  ports: 5,
+}
 
 export default function Wizard() {
-  const [view, setView] = useState<'start' | 'select' | 'match' | 'day0' | 'dayn'>('start')
+  const [view, setView] = useState<'start' | 'select' | 'match' | 'day0' | 'dayn' | 'ports'>(
+    'start',
+  )
   const [job, setJob] = useState<Job | null>(null)
 
   const openJob = (selected: Job) => {
     setJob(selected)
     // Resume where the job left off.
     if (selected.status.startsWith('dayn_') || JOB_DONE_STATUSES.includes(selected.status)) {
-      setView('dayn')
+      // devices parked at dayn_complete are waiting for the ports stage
+      setView(selected.devices.some((d) => d.state === 'dayn_complete') ? 'ports' : 'dayn')
     } else if (selected.status.startsWith('day0_')) {
       setView('day0')
     } else {
@@ -1079,7 +1143,7 @@ export default function Wizard() {
   }
 
   const activeStep =
-    view === 'dayn' && job && JOB_DONE_STATUSES.includes(job.status) ? 5 : STEP_FOR_VIEW[view]
+    job && JOB_DONE_STATUSES.includes(job.status) && view !== 'ports' ? 6 : STEP_FOR_VIEW[view]
 
   return (
     <div className="max-w-5xl">
@@ -1095,7 +1159,16 @@ export default function Wizard() {
       {view === 'day0' && job && (
         <Day0View job={job} onContinue={toDayN} onBack={() => setView('match')} />
       )}
-      {view === 'dayn' && job && <DayNView job={job} />}
+      {view === 'dayn' && job && (
+        <DayNView
+          job={job}
+          onContinue={(current) => {
+            setJob(current)
+            setView('ports')
+          }}
+        />
+      )}
+      {view === 'ports' && job && <DayNView job={job} stage={2} />}
     </div>
   )
 }

@@ -1122,3 +1122,26 @@ Center applies those during **Provision**, which is what the GUI runs. Template
 deploy pushes template CLI only, so no amount of variable work on our side will
 produce them. Getting `sda/provisionDevices` accepted is therefore the whole
 remaining task, not a side quest.
+
+## Staged Day-N: base config, then ports/uplinks (v1.18.0) ✅
+
+**A failing composite member no longer aborts the rest.** Members are
+independent config blocks, but `_deploy_one` stopped at the first failure — so a
+port template tripping over an interface took the VLAN and banner members down
+with it and left the switch with neither. Every member is now attempted and the
+failures are reported together ("1 of 3 templates failed; the others were
+applied").
+
+**Day-N can be split into two stages.** Stage 1 deploys the base templates;
+stage 2 (wizard step 5, "Ports & uplinks") deploys the port/uplink template
+afterwards. `DayNDeployRequest.activate` (default True, so single-stage runs are
+unchanged) lets stage 1 finish without touching NetBox — §11 forbids marking a
+device active while a stage is outstanding. Devices park at `dayn_complete`
+between stages; stage 2 activates.
+
+- [x] Per-member isolation + aggregate error + regression test
+- [x] Migration 0012: `jobs.dayn2_template_id`, `job_devices.dayn2_variables`
+- [x] `/dayn2/prepare` + `/dayn2/deploy`; `run_dayn(stage=, activate=)`
+- [x] `DayNView` parameterised by stage; 6-step stepper; resume lands on the
+      ports stage when devices are parked at `dayn_complete`
+- [x] 243 pytest / 39 vitest / 4 e2e green

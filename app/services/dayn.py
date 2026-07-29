@@ -707,6 +707,7 @@ async def _deploy_one(
     params: dict[str, str],
     poll_interval: float,
     task_timeout: float,
+    activate: bool = True,
 ) -> None:
     with open_session() as db:
         device = db.get(JobDevice, device_id)
@@ -723,11 +724,26 @@ async def _deploy_one(
             return
 
     _set_device(device_id, "dayn_deploying")
+    failures: list[str] = []
     try:
         # A composite template must be deployed member by member, in order —
         # deploying the container itself pushes its member JSON to the device.
         targets = await client.get_deployable_templates(template_id)
-        for member_id, member_variables in targets:
+    except PnPBridgeError as exc:
+        logger.error("Day-N failed for device", extra={"job_id": job_id, "serial": serial})
+        _set_device(device_id, "dayn_failed", error=exc.message)
+        return
+    except Exception as exc:  # per-device isolation
+        logger.exception("Unexpected Day-N error", extra={"job_id": job_id})
+        _set_device(device_id, "dayn_failed", error=str(exc))
+        return
+
+    for member_id, member_variables in targets:
+        # Members are independent config blocks, so one failing must not cancel
+        # the rest: a broken port template used to take the VLAN and banner
+        # members down with it and leave the switch with neither. Every member
+        # is attempted; the failures are reported together at the end.
+        try:
             member_params = (
                 {k: v for k, v in params.items() if k in member_variables}
                 if member_variables
@@ -755,16 +771,30 @@ async def _deploy_one(
                 await poll_task(
                     client, handle, poll_interval=poll_interval, task_timeout=task_timeout
                 )
-    except PnPBridgeError as exc:
-        logger.error("Day-N failed for device", extra={"job_id": job_id, "serial": serial})
-        _set_device(device_id, "dayn_failed", error=exc.message)
-        return
-    except Exception as exc:  # per-device isolation
-        logger.exception("Unexpected Day-N error", extra={"job_id": job_id})
-        _set_device(device_id, "dayn_failed", error=str(exc))
+        except PnPBridgeError as exc:
+            logger.error(
+                "Day-N template failed for device",
+                extra={"job_id": job_id, "serial": serial, "template_id": member_id},
+            )
+            failures.append(f"{member_id}: {exc.message}")
+        except Exception as exc:  # per-device, per-member isolation
+            logger.exception("Unexpected Day-N error", extra={"job_id": job_id})
+            failures.append(f"{member_id}: {exc}")
+
+    if failures:
+        prefix = (
+            f"{len(failures)} of {len(targets)} templates failed; the others were applied. "
+            if len(targets) > 1
+            else ""
+        )
+        _set_device(device_id, "dayn_failed", error=prefix + " | ".join(failures))
         return
 
     # Day-N verifiably succeeded — only now touch the source of truth.
+    if not activate:
+        # a further stage will follow; leave NetBox alone until it has run
+        _set_device(device_id, "dayn_complete")
+        return
     if netbox_settings is None or netbox_device_id is None:
         _set_device(device_id, "activate_failed", error="NetBox not configured.")
         return
@@ -789,15 +819,26 @@ async def run_dayn(
     device_params: dict[int, dict[str, str]],
     poll_interval: float = POLL_INTERVAL_SECONDS,
     task_timeout: float = TASK_TIMEOUT_SECONDS,
+    stage: int = 1,
+    activate: bool = True,
 ) -> None:
-    """Deploy the Day-N template to every eligible device, isolated per device."""
+    """Deploy the Day-N template to every eligible device, isolated per device.
+
+    `stage` 2 is the optional port/uplink pass; `activate` decides whether a
+    success also patches NetBox to `active`. Stage 1 runs with `activate=False`
+    when a stage 2 will follow, so the source of truth is only touched once the
+    device is really finished (§11).
+    """
     with open_session() as db:
         job = db.get(Job, job_id)
         if job is None:
             return
         job.status = "dayn_running"
-        job.current_step = 4
-        job.dayn_template_id = template_id
+        job.current_step = 4 if stage == 1 else 5
+        if stage == 1:
+            job.dayn_template_id = template_id
+        else:
+            job.dayn2_template_id = template_id
         catalyst_row = settings_store.get_service_settings(db, "catalyst")
         catalyst_secret = settings_store.decrypt_secret(catalyst_row)
         netbox_row = settings_store.get_service_settings(db, "netbox")
@@ -833,6 +874,7 @@ async def run_dayn(
                     params,
                     poll_interval,
                     task_timeout,
+                    activate,
                 )
                 for device_id, params in device_params.items()
             ),
