@@ -478,6 +478,7 @@ async def _provision_to_site(
         poll_interval=poll_interval,
         task_timeout=device_timeout,
         label="Provisioning",
+        always_drill=True,
     )
     logger.info("Provisioned to site", extra={"job_id": job_id, "serial": serial})
     return None

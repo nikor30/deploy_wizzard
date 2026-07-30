@@ -1145,3 +1145,26 @@ between stages; stage 2 activates.
 - [x] `DayNView` parameterised by stage; 6-step stepper; resume lands on the
       ports stage when devices are parked at `dayn_complete`
 - [x] 243 pytest / 39 vitest / 4 e2e green
+
+## Provisioning: a switch goes to the building, not the floor (v1.19.0) ✅
+
+`NCSP11001` explained, from Cisco's own "Assign network devices to a site"
+reference: **"Access points, Sensors are assigned to floor. Remaining network
+devices are assigned to building."** The site mapping resolved
+`Global/00_EMEA/Stockdorf - STO/Building 3/U3` — a **floor** — and a switch
+handed a floor id fails intent validation. The verb (POST vs PUT) was never the
+problem.
+
+`resolve_provision_site()` looks the mapped site up in `/site`, and when its
+`additionalInfo.attributes.type` is `floor` it substitutes the building parent
+(`parentId`, falling back to the name hierarchy minus the last segment).
+Buildings and areas pass through untouched.
+
+Provisioning task failures now also drill the task tree even when
+`failureReason` is set (`poll_task(always_drill=True)`) — the top-level reason
+is the generic NCSP11001 and the CFS validation that actually objected only
+names itself in a child task.
+
+- [x] `resolve_provision_site()` + floor/building tests
+- [x] `poll_task(always_drill=)` for provisioning
+- [x] 245 pytest / 39 vitest / 4 e2e green
