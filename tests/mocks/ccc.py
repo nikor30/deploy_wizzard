@@ -52,7 +52,12 @@ def create_ccc_app() -> FastAPI:
         _check_token(request)
         all_sites = [
             {"id": "uuid-global", "siteNameHierarchy": "Global"},
-            {"id": CCC_SITE_ID, "siteNameHierarchy": CCC_SITE_NAME},
+            {
+                "id": CCC_SITE_ID,
+                "siteNameHierarchy": CCC_SITE_NAME,
+                "parentId": "uuid-global",
+                "additionalInfo": [{"attributes": {"type": "building"}}],
+            },
         ]
         return {"response": all_sites[offset - 1 : offset - 1 + limit]}
 

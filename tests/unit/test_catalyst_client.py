@@ -381,6 +381,7 @@ async def test_already_provisioned_device_is_re_provisioned_with_put() -> None:
     'User intent validation failed'. An existing record means PUT."""
     with respx.mock as respx_mock:
         respx_mock.post(f"{BASE}/dna/system/api/v1/auth/token").respond(200, json={"Token": "t"})
+        respx_mock.get(SITE_URL).respond(200, json={"response": []})
         respx_mock.get(f"{BASE}/dna/intent/api/v1/sda/provisionDevices").respond(
             200, json={"response": [{"id": "prov-1", "networkDeviceId": "dev-1"}]}
         )
@@ -399,6 +400,7 @@ async def test_already_provisioned_device_is_re_provisioned_with_put() -> None:
 async def test_unprovisioned_device_is_provisioned_with_post() -> None:
     with respx.mock as respx_mock:
         respx_mock.post(f"{BASE}/dna/system/api/v1/auth/token").respond(200, json={"Token": "t"})
+        respx_mock.get(SITE_URL).respond(200, json={"response": []})
         respx_mock.get(f"{BASE}/dna/intent/api/v1/sda/provisionDevices").respond(
             200, json={"response": []}
         )
@@ -411,4 +413,59 @@ async def test_unprovisioned_device_is_provisioned_with_post() -> None:
     assert post.called
     assert json.loads(post.calls[0].request.content) == [
         {"siteId": "site-1", "networkDeviceId": "dev-1"}
+    ]
+
+
+async def test_a_switch_is_provisioned_to_the_building_not_the_floor() -> None:
+    """Cisco: "Access points, Sensors are assigned to floor. Remaining network
+    devices are assigned to building." A switch handed a floor id fails intent
+    validation with NCSP11001."""
+    floor = {
+        "id": "floor-u3",
+        "parentId": "bldg-3",
+        "siteNameHierarchy": "Global/00_EMEA/Stockdorf - STO/Building 3/U3",
+        "additionalInfo": [{"attributes": {"type": "floor"}}],
+    }
+    building = {
+        "id": "bldg-3",
+        "siteNameHierarchy": "Global/00_EMEA/Stockdorf - STO/Building 3",
+        "additionalInfo": [{"attributes": {"type": "building"}}],
+    }
+    with respx.mock as respx_mock:
+        respx_mock.post(TOKEN_URL).respond(200, json={"Token": "t"})
+        respx_mock.get(SITE_URL).respond(200, json={"response": [floor, building]})
+        respx_mock.get(f"{BASE}/dna/intent/api/v1/sda/provisionDevices").respond(
+            200, json={"response": []}
+        )
+        post = respx_mock.post(f"{BASE}/dna/intent/api/v1/sda/provisionDevices").respond(
+            202, json={"response": {"taskId": "task-1"}}
+        )
+        async with CatalystCenterClient(BASE, "admin", "pw") as client:
+            await client.provision_devices("floor-u3", "dev-1")
+
+    assert json.loads(post.calls[0].request.content) == [
+        {"siteId": "bldg-3", "networkDeviceId": "dev-1"}
+    ]
+
+
+async def test_a_building_site_is_passed_through_untouched() -> None:
+    building = {
+        "id": "bldg-3",
+        "siteNameHierarchy": "Global/Building 3",
+        "additionalInfo": [{"attributes": {"type": "building"}}],
+    }
+    with respx.mock as respx_mock:
+        respx_mock.post(TOKEN_URL).respond(200, json={"Token": "t"})
+        respx_mock.get(SITE_URL).respond(200, json={"response": [building]})
+        respx_mock.get(f"{BASE}/dna/intent/api/v1/sda/provisionDevices").respond(
+            200, json={"response": []}
+        )
+        post = respx_mock.post(f"{BASE}/dna/intent/api/v1/sda/provisionDevices").respond(
+            202, json={"response": {"taskId": "task-1"}}
+        )
+        async with CatalystCenterClient(BASE, "admin", "pw") as client:
+            await client.provision_devices("bldg-3", "dev-1")
+
+    assert json.loads(post.calls[0].request.content) == [
+        {"siteId": "bldg-3", "networkDeviceId": "dev-1"}
     ]

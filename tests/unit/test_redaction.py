@@ -61,6 +61,9 @@ async def test_http_trace_logs_bodies_but_never_a_token(client: TestClient) -> N
             respx_mock.post("https://ccc.example.com/dna/system/api/v1/auth/token").respond(
                 200, json={"Token": "super-secret-token"}
             )
+            respx_mock.get("https://ccc.example.com/dna/intent/api/v1/site").respond(
+                200, json={"response": []}
+            )
             respx_mock.get(
                 "https://ccc.example.com/dna/intent/api/v1/sda/provisionDevices"
             ).respond(200, json={"response": []})

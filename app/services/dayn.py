@@ -539,18 +539,31 @@ async def poll_task(
     poll_interval: float = POLL_INTERVAL_SECONDS,
     task_timeout: float = TASK_TIMEOUT_SECONDS,
     label: str = "Day-N",
+    always_drill: bool = False,
 ) -> None:
-    """Poll a CCC task until it ends; raise with the real reason on failure."""
+    """Poll a CCC task until it ends; raise with the real reason on failure.
+
+    `always_drill` also fetches the task tree when `failureReason` is already
+    set. Provisioning needs that: its top-level reason is a generic
+    `NCSP11001 … user intent validation failed`, and the CFS validation that
+    actually objected only names itself in a child task.
+    """
     deadline = asyncio.get_event_loop().time() + task_timeout
     while True:
         task = await client.get_task(task_id)
         if task.get("isError"):
-            reason = task.get("failureReason") or ""
-            if not reason:
+            reason = str(task.get("failureReason") or "")
+            if not reason or always_drill:
                 # §11: errors are often buried in the task tree
                 children = await client.get_task_tree(task_id)
-                reasons = [str(c["failureReason"]) for c in children if c.get("failureReason")]
-                reason = "; ".join(reasons) or "no failureReason from CCC"
+                extra = [
+                    str(c["failureReason"])
+                    for c in children
+                    if c.get("failureReason") and str(c["failureReason"]) != reason
+                ]
+                if extra:
+                    reason = f"{reason} | {'; '.join(extra)}" if reason else "; ".join(extra)
+                reason = reason or "no failureReason from CCC"
             raise PnPBridgeError(f"{label} task failed: {reason}")
         if task.get("endTime"):
             return
