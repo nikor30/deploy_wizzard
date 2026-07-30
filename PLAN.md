@@ -1168,3 +1168,28 @@ names itself in a child task.
 - [x] `resolve_provision_site()` + floor/building tests
 - [x] `poll_task(always_drill=)` for provisioning
 - [x] 245 pytest / 39 vitest / 4 e2e green
+
+## Revert the floor→building guess; drill batch failures properly (v1.19.1) ✅
+
+**v1.19.0's site substitution was wrong and is reverted.** A switch *can* be
+provisioned to a floor in Catalyst Center. The doc line I reasoned from
+("Access points, Sensors are assigned to floor. Remaining network devices are
+assigned to building.") describes the *assign-to-site* default, not a constraint
+on provisioning. Silently swapping the operator's mapped floor for its building
+changed their intent for no benefit — the site is now used exactly as mapped.
+
+**The batch failure is now drilled.** CCC answered "Batch Operation failed. Not
+all child operations succeeded. Submit a GET task tree request using the parent
+taskId to get complete statuses." — and we did fetch the tree, but only read
+`failureReason`, which a batch child commonly leaves empty while describing
+itself in `progress` or in `errorCode` + `data`. `_task_detail()` reads all four;
+`_points_at_the_task_tree()` also triggers the drill whenever CCC's own message
+tells us to look there.
+
+- [x] `resolve_provision_site()` removed; site used as mapped
+- [x] `_task_detail()` + `_points_at_the_task_tree()` + tests
+- [x] 244 pytest / 39 vitest / 4 e2e green
+
+**Note:** the webhook now reports `{"detail":"invalid token"}` — the receiver is
+answering, so the auth-token field is reaching it and the configured value is
+being rejected. That is a value to correct in Settings, not a code defect.

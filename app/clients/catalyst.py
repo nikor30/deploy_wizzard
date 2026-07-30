@@ -51,20 +51,6 @@ PNP_SELECTABLE_STATES: tuple[str, ...] = (
 )
 
 
-# Site hierarchy levels. Only floors matter here: a switch provisioned to one
-# fails intent validation (see resolve_provision_site).
-SITE_TYPE_FLOOR = "floor"
-
-
-def _site_type(site: dict[str, Any]) -> str | None:
-    """Hierarchy level of a `/site` entry: area, building or floor."""
-    for info in site.get("additionalInfo") or []:
-        attributes = info.get("attributes") or {}
-        if attributes.get("type"):
-            return str(attributes["type"]).lower()
-    return None
-
-
 def _template_params(template: dict[str, Any]) -> list[str]:
     """Variable names from a template payload, de-duplicated in order.
 
@@ -418,34 +404,6 @@ class CatalystCenterClient:
             json={"networkdevice": [device_uuid]},
         )
 
-    async def resolve_provision_site(self, site_id: str) -> str:
-        """The site a *switch* can be provisioned to.
-
-        Cisco: "Access points, Sensors are assigned to floor. Remaining network
-        devices are assigned to building." A switch handed a floor id fails
-        intent validation with NCSP11001, which is exactly what the live
-        controller answered for a site mapped to `.../Building 3/U3`. When the
-        mapped site is a floor, its building parent is used instead; anything
-        else is passed through untouched.
-        """
-        sites = await self.get_sites()
-        by_id = {str(site.get("id")): site for site in sites}
-        site = by_id.get(site_id)
-        if site is None or _site_type(site) != SITE_TYPE_FLOOR:
-            return site_id
-        parent_id = site.get("parentId")
-        if parent_id and str(parent_id) in by_id:
-            logger.info("Site %s is a floor — provisioning to its building instead", site_id)
-            return str(parent_id)
-        # no usable parentId: fall back to the name hierarchy minus the floor
-        hierarchy = str(site.get("siteNameHierarchy") or "")
-        parent_name = hierarchy.rsplit("/", 1)[0] if "/" in hierarchy else ""
-        for candidate in sites:
-            if parent_name and str(candidate.get("siteNameHierarchy")) == parent_name:
-                logger.info("Site %s is a floor — provisioning to %s instead", site_id, parent_name)
-                return str(candidate.get("id"))
-        return site_id
-
     async def get_provisioned_device(self, device_uuid: str) -> dict[str, Any] | None:
         """The device's existing provisioning record, or None if it has none.
 
@@ -474,13 +432,15 @@ class CatalystCenterClient:
         path segment this is the general provision API in 2.3.7, not fabric-only
         (see the Catalyst Center 2.3.7 "Provision devices" API reference).
 
-        **POST creates a provisioning, PUT updates one.** A device claimed via
-        PnP already has a provisioning record, so POST passes the request check
-        (HTTP 202) and then fails inside the task with `NCSP11001: User intent
-        validation failed`. Existing record ⇒ PUT, carrying the record's `id`.
-        Not retried — provisioning is not idempotent.
+        **POST creates a provisioning, PUT updates one.** A device that already
+        has a provisioning record is re-provisioned with PUT, carrying the
+        record's `id`. Not retried — provisioning is not idempotent.
+
+        The site is used exactly as mapped: a switch can be provisioned to a
+        floor, so no substitution is made. (An earlier version silently used the
+        floor's building parent, based on a doc line about *assignment*; that
+        was wrong and changed the operator's intent.)
         """
-        site_id = await self.resolve_provision_site(site_id)
         existing = await self.get_provisioned_device(device_uuid)
         entry: dict[str, Any] = {"siteId": site_id, "networkDeviceId": device_uuid}
         method = "POST"

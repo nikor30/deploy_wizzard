@@ -553,16 +553,12 @@ async def poll_task(
         task = await client.get_task(task_id)
         if task.get("isError"):
             reason = str(task.get("failureReason") or "")
-            if not reason or always_drill:
+            if not reason or always_drill or _points_at_the_task_tree(reason):
                 # §11: errors are often buried in the task tree
                 children = await client.get_task_tree(task_id)
-                extra = [
-                    str(c["failureReason"])
-                    for c in children
-                    if c.get("failureReason") and str(c["failureReason"]) != reason
-                ]
+                extra = [d for d in (_task_detail(c) for c in children) if d and d != reason]
                 if extra:
-                    reason = f"{reason} | {'; '.join(extra)}" if reason else "; ".join(extra)
+                    reason = f"{reason} | {' ; '.join(extra)}" if reason else " ; ".join(extra)
                 reason = reason or "no failureReason from CCC"
             raise PnPBridgeError(f"{label} task failed: {reason}")
         if task.get("endTime"):
@@ -570,6 +566,38 @@ async def poll_task(
         if asyncio.get_event_loop().time() >= deadline:
             raise TaskTimeout(f"{label} task {task_id} did not finish within {int(task_timeout)}s.")
         await asyncio.sleep(poll_interval)
+
+
+# CCC's way of saying "the reason is in the child tasks, go look".
+TASK_TREE_HINTS = ("task tree", "child operations", "not all child")
+
+
+def _points_at_the_task_tree(reason: str) -> bool:
+    lowered = reason.lower()
+    return any(hint in lowered for hint in TASK_TREE_HINTS)
+
+
+def _task_detail(task: dict[str, Any]) -> str:
+    """The most specific error text a (child) task carries.
+
+    `failureReason` is only one of the places CCC puts it: a batch child often
+    leaves that empty and describes itself in `progress`, or carries a code in
+    `errorCode` with the text in `data`. Taking only `failureReason` is why a
+    "Batch Operation failed. Not all child operations succeeded." told the
+    operator nothing.
+    """
+    if not task.get("isError") and not task.get("failureReason"):
+        return ""
+    parts: list[str] = []
+    for key in ("failureReason", "progress", "errorCode", "data"):
+        value = task.get(key)
+        if not value:
+            continue
+        text = str(value).strip()
+        # `progress` is often just a status word, or the task id echoed back
+        if text and text not in parts and text != str(task.get("id")):
+            parts.append(text)
+    return " / ".join(parts)
 
 
 def _set_device(device_id: int, state: str, error: str | None = None) -> None:
