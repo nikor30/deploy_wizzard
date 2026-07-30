@@ -569,3 +569,34 @@ def test_ports_stage_deploys_its_own_template_and_activates(client: TestClient) 
     assert patch.called, "the last stage activates NetBox"
     job = client.get(f"/api/wizard/jobs/{job_id}").json()
     assert all(d["state"] == "completed" for d in job["devices"])
+
+
+def test_batch_failure_surfaces_the_child_task_reasons() -> None:
+    """CCC's "Batch Operation failed. Not all child operations succeeded. Submit
+    a GET task tree request..." says nothing on its own, and a batch child often
+    leaves failureReason empty and describes itself in progress/errorCode."""
+    from app.services.dayn import _points_at_the_task_tree, _task_detail
+
+    parent = (
+        "Batch Operation failed. Not all child operations succeeded. Submit a GET task "
+        "tree request using the parent taskId to get complete statuses."
+    )
+    assert _points_at_the_task_tree(parent)
+    assert not _points_at_the_task_tree("NCSP11001: user intent validation failed")
+
+    # failureReason present -> used
+    assert _task_detail({"isError": True, "failureReason": "no AAA server for site"}) == (
+        "no AAA server for site"
+    )
+    # empty failureReason, detail in progress / errorCode
+    assert (
+        _task_detail(
+            {"isError": True, "failureReason": "", "progress": "Interface Vlan510 not found"}
+        )
+        == "Interface Vlan510 not found"
+    )
+    assert "NCSP10099" in _task_detail(
+        {"isError": True, "errorCode": "NCSP10099", "data": "missing DHCP server"}
+    )
+    # a child that succeeded contributes nothing
+    assert _task_detail({"isError": False, "progress": "done"}) == ""
