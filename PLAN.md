@@ -1205,3 +1205,23 @@ trace and hunt for the request.
 
 - [x] `logger.warning(..., extra={"task": ..., "task_tree": ...})` on an empty drill
 - [x] 244 pytest / 39 vitest / 4 e2e green
+
+## The provisioning failure named: NCHS20057 (v1.20.0) ✅
+
+The live task tree finally split the operation in two:
+
+* `Provision Devices: Assigning Devices to Sites` → **isError false** — the site
+  assignment succeeds, so the mapped floor was never the problem (v1.19.0's
+  floor→building substitution was correctly reverted).
+* `Provision Devices: Provisioning assigned Devices` → **isError true,
+  errorCode NCHS20057** — the config push is what fails.
+
+Per Cisco's base-automation troubleshooting guide, Catalyst Center fails a
+provision when it finds **brownfield AAA CLI it did not push itself** while AAA
+is defined in the site's network settings. The Day-0 onboarding template puts
+exactly that on the box, so provisioning refuses to take ownership.
+
+- [x] `_task_detail(task, parent_reason)` — a batch child repeating the parent's
+      generic reason no longer buries its own `errorCode`
+- [x] `provision_hint()` for NCHS20057 / NCSO20070 with the remedy
+- [x] 244 pytest / 39 vitest / 4 e2e green

@@ -556,7 +556,9 @@ async def poll_task(
             if not reason or always_drill or _points_at_the_task_tree(reason):
                 # §11: errors are often buried in the task tree
                 children = await client.get_task_tree(task_id)
-                extra = [d for d in (_task_detail(c) for c in children) if d and d != reason]
+                extra = [
+                    d for d in (_task_detail(c, reason) for c in children) if d and d != reason
+                ]
                 if extra:
                     reason = f"{reason} | {' ; '.join(extra)}" if reason else " ; ".join(extra)
                 else:
@@ -570,7 +572,7 @@ async def poll_task(
                         extra={"task_id": task_id, "task": task, "task_tree": children},
                     )
                 reason = reason or "no failureReason from CCC"
-            raise PnPBridgeError(f"{label} task failed: {reason}")
+            raise PnPBridgeError(f"{label} task failed: {reason}{provision_hint(reason)}")
         if task.get("endTime"):
             return
         if asyncio.get_event_loop().time() >= deadline:
@@ -587,7 +589,32 @@ def _points_at_the_task_tree(reason: str) -> bool:
     return any(hint in lowered for hint in TASK_TREE_HINTS)
 
 
-def _task_detail(task: dict[str, Any]) -> str:
+PROVISION_HINTS: dict[str, str] = {
+    # Seen on a live 2.3.7 controller: "Assigning Devices to Sites" succeeds,
+    # then "Provisioning assigned Devices" fails with this code.
+    "NCHS20057": (
+        " — Catalyst Center refuses to provision a device that already carries AAA/TACACS/RADIUS "
+        "CLI it did not push itself. If your Day-0 onboarding template configures AAA, remove "
+        "those lines from it and let the site's network settings supply them during provisioning "
+        "(that is the config you are trying to get onto the box in the first place). Provisioning "
+        "the same device once in the Catalyst Center GUI shows the conflicting commands by name."
+    ),
+    "NCSO20070": (
+        " — one or more AAA CLIs are already present on the device. Same cause as NCHS20057: "
+        "remove AAA from the Day-0 template so provisioning owns it."
+    ),
+}
+
+
+def provision_hint(reason: str) -> str:
+    """Actionable text for the provisioning error codes we have seen live."""
+    for code, hint in PROVISION_HINTS.items():
+        if code in reason:
+            return hint
+    return ""
+
+
+def _task_detail(task: dict[str, Any], parent_reason: str = "") -> str:
     """The most specific error text a (child) task carries.
 
     `failureReason` is only one of the places CCC puts it: a batch child often
@@ -596,15 +623,18 @@ def _task_detail(task: dict[str, Any]) -> str:
     "Batch Operation failed. Not all child operations succeeded." told the
     operator nothing.
     """
-    if not task.get("isError") and not task.get("failureReason"):
+    if not task.get("isError"):
         return ""
     parts: list[str] = []
-    for key in ("failureReason", "progress", "errorCode", "data"):
+    for key in ("errorCode", "progress", "failureReason", "data"):
         value = task.get(key)
         if not value:
             continue
         text = str(value).strip()
-        # `progress` is often just a status word, or the task id echoed back
+        # A batch child repeats the parent's generic failureReason verbatim;
+        # echoing it back adds nothing and buries the child's own errorCode.
+        if text == parent_reason:
+            continue
         if text and text not in parts and text != str(task.get("id")):
             parts.append(text)
     return " / ".join(parts)
