@@ -1193,3 +1193,15 @@ tells us to look there.
 **Note:** the webhook now reports `{"detail":"invalid token"}` — the receiver is
 answering, so the auth-token field is reaching it and the configured value is
 being rejected. That is a value to correct in Settings, not a code defect.
+
+## Dump the raw task tree when the drill finds nothing (v1.19.2) ✅
+
+CCC still answered only "Batch Operation failed … submit a GET task tree
+request", which means the tree it returned carried nothing in the four fields
+`_task_detail()` reads. When that happens the whole tree (and the parent task)
+is now logged verbatim at WARNING with `task_tree` in the context, so the
+Logs page holds the raw evidence without the operator having to enable HTTP
+trace and hunt for the request.
+
+- [x] `logger.warning(..., extra={"task": ..., "task_tree": ...})` on an empty drill
+- [x] 244 pytest / 39 vitest / 4 e2e green
