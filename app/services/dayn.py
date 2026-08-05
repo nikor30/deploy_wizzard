@@ -559,6 +559,16 @@ async def poll_task(
                 extra = [d for d in (_task_detail(c) for c in children) if d and d != reason]
                 if extra:
                     reason = f"{reason} | {' ; '.join(extra)}" if reason else " ; ".join(extra)
+                else:
+                    # The tree carried nothing we recognise. Dump it verbatim to
+                    # the Logs page rather than leaving the operator with CCC's
+                    # "submit a GET task tree request" and no way to act on it.
+                    logger.warning(
+                        "%s task %s failed and its task tree carried no recognised reason",
+                        label,
+                        task_id,
+                        extra={"task_id": task_id, "task": task, "task_tree": children},
+                    )
                 reason = reason or "no failureReason from CCC"
             raise PnPBridgeError(f"{label} task failed: {reason}")
         if task.get("endTime"):
