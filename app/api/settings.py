@@ -24,7 +24,7 @@ from app.logging_setup import set_http_trace
 from app.services import settings_store
 from app.services.connections import get_catalyst_client, get_netbox_client
 from app.services.dayn import ACCESS_PORT_SOURCES, load_device_context, resolve_variables
-from app.services.settings_store import pnp_states, template_filter
+from app.services.settings_store import PROVISION_METHODS, pnp_states, template_filter
 from app.services.suggest import suggest_variable_mappings
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -435,6 +435,16 @@ class AppFlags(BaseModel):
     # Where the Day-N ACCESSPORTS variable comes from: the NetBox interface list
     # (uplinks excluded) or the template's own on-device loop.
     access_port_source: str = "netbox"
+    # How a claimed device is attached to its site: "assign" (non-SDA — Device
+    # Controllability pushes the site's network settings) or "sda" (fabric).
+    provision_method: str = "assign"
+
+    @field_validator("provision_method")
+    @classmethod
+    def _known_method(cls, value: str) -> str:
+        if value not in PROVISION_METHODS:
+            raise ValueError(f"provision_method must be one of {', '.join(PROVISION_METHODS)}")
+        return value
 
     @field_validator("access_port_source")
     @classmethod
@@ -487,6 +497,7 @@ def get_flags(db: DbSession) -> AppFlags:
         provision_after_claim=settings_store.provision_after_claim(db),
         http_trace=settings_store.http_trace(db),
         access_port_source=settings_store.access_port_source(db),
+        provision_method=settings_store.provision_method(db),
     )
 
 
@@ -499,6 +510,7 @@ def put_flags(payload: AppFlags, db: DbSession) -> AppFlags:
     _set_setting(db, "provision_after_claim", "true" if payload.provision_after_claim else "false")
     _set_setting(db, "http_trace", "true" if payload.http_trace else "false")
     _set_setting(db, "access_port_source", payload.access_port_source)
+    _set_setting(db, "provision_method", payload.provision_method)
     # applies immediately — no restart needed to capture the next call
     set_http_trace(payload.http_trace)
     db.flush()

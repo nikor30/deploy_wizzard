@@ -129,3 +129,18 @@ def access_port_source(db: Session) -> str:
     """Where the Day-N access-port list comes from: "netbox" or "device"."""
     row = db.get(AppSetting, "access_port_source")
     return row.value if row is not None and row.value in ("netbox", "device") else "netbox"
+
+
+PROVISION_METHODS: tuple[str, ...] = ("assign", "sda")
+
+
+def provision_method(db: Session) -> str:
+    """How a claimed device is attached to its site.
+
+    "assign" (default) uses networkDevices/assignToSite — the non-SDA path,
+    where Device Controllability pushes the site's network settings. "sda" uses
+    sda/provisionDevices, which additionally runs the fabric provisioning step
+    and is rejected on a non-fabric switch.
+    """
+    row = db.get(AppSetting, "provision_method")
+    return row.value if row is not None and row.value in PROVISION_METHODS else "assign"

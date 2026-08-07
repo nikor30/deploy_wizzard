@@ -165,6 +165,19 @@ def create_ccc_app() -> FastAPI:
             STATE.device_tags.setdefault(str(uuid), []).append(tag_id)
         return {"response": {"taskId": "tag-task"}}
 
+    @app.post("/dna/intent/api/v1/networkDevices/assignToSite/apply")
+    async def assign_to_site(request: Request) -> dict[str, Any]:
+        """Non-SDA site attachment: Device Controllability does the rest."""
+        _check_token(request)
+        body = await request.json()
+        if not body.get("siteId") or not body.get("deviceIds"):
+            raise HTTPException(status_code=400, detail="assignToSite needs siteId + deviceIds")
+        STATE.provisioned.extend(str(d) for d in body["deviceIds"])
+        STATE.task_counter += 1
+        task_id = f"task-{STATE.task_counter}"
+        STATE.tasks[task_id] = {"polls": 0, "fail": STATE.provision_fail}
+        return {"response": {"taskId": task_id}, "version": "1.0"}
+
     @app.get("/dna/intent/api/v1/sda/provisionDevices")
     def provisioned(request: Request, networkDeviceId: str = "") -> dict[str, Any]:
         _check_token(request)

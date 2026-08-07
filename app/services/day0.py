@@ -440,6 +440,7 @@ async def _provision_to_site(
     device_id: int,
     poll_interval: float,
     device_timeout: float,
+    method: str = "assign",
 ) -> str | None:
     """Provision the claimed device to its site; returns an error or None.
 
@@ -467,7 +468,12 @@ async def _provision_to_site(
             f"Device {ip} is not in the Catalyst Center inventory yet, so it cannot be "
             "provisioned. Network settings (AAA/RADIUS/DNS/DHCP) were NOT applied."
         )
-    response = await client.provision_devices(site_id, uuid)
+    if method == "assign":
+        # Non-SDA: assignment is the operation. Device Controllability then
+        # pushes the site's network settings.
+        response = await client.assign_device_to_site(site_id, uuid)
+    else:
+        response = await client.provision_devices(site_id, uuid)
     inner = response.get("response")
     task_id = (inner or {}).get("taskId") if isinstance(inner, dict) else None
     if not task_id:
@@ -492,6 +498,7 @@ async def _claim_one(
     poll_interval: float,
     device_timeout: float,
     provision: bool,
+    provision_method: str = "assign",
 ) -> None:
     ccc_device_id = payload["deviceId"]
     _set_device_state(device_id, "claiming")
@@ -533,7 +540,7 @@ async def _claim_one(
     if provision:
         try:
             provision_warning = await _provision_to_site(
-                client, job_id, device_id, poll_interval, device_timeout
+                client, job_id, device_id, poll_interval, device_timeout, provision_method
             )
         except PnPBridgeError as exc:
             provision_warning = exc.message
@@ -589,6 +596,7 @@ async def run_day0(
         catalyst_row = settings_store.get_service_settings(db, "catalyst")
         catalyst_secret = settings_store.decrypt_secret(catalyst_row)
         provision = settings_store.provision_after_claim(db)
+        provision_method = settings_store.provision_method(db)
         # decrypt template secrets once (name -> plaintext) for global variables
         box = settings_store.get_secret_box()
         secret_values = {
@@ -632,6 +640,7 @@ async def run_day0(
                     poll_interval,
                     device_timeout,
                     provision,
+                    provision_method,
                 )
                 for device_id, payload in work
             ),
