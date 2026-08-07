@@ -260,3 +260,17 @@ def test_ccc_tag_name_strips_what_ccc_rejects_as_a_group_name() -> None:
     assert ccc_tag_name("access/switch") == "access_switch"
     assert ccc_tag_name("a//b") == "a_b"  # runs collapse
     assert ccc_tag_name("///") is None  # nothing usable left
+
+
+def test_a_403_on_provisioning_points_at_the_ccc_account_role() -> None:
+    """The live controller answered "Role does not have valid permissions to
+    access the API" — a permissions problem on the account PnP Bridge uses, not
+    a wrong endpoint."""
+    from app.services.dayn import provision_hint
+
+    hint = provision_hint(
+        "Catalyst Center POST /dna/intent/api/v1/business/sda/provision-device failed with "
+        "HTTP 403 — Role does not have valid permissions to access the API."
+    )
+    assert "does not have permission to provision" in hint
+    assert "Users & Roles" in hint

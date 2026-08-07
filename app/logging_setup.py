@@ -85,13 +85,36 @@ def _write_log_entry(record: logging.LogRecord) -> None:
         )
 
 
+_sink_failed = False
+
+
 def _sink_worker() -> None:
+    global _sink_failed
     while True:
         record = _log_queue.get()
         try:
             _write_log_entry(record)
-        except Exception:  # a broken sink must never take the app down
-            pass
+            _sink_failed = False
+        except Exception as exc:  # a broken sink must never take the app down
+            # ...but it must not fail silently either: an empty Logs page with a
+            # working app looked like data loss and took a while to spot.
+            if not _sink_failed:
+                _sink_failed = True
+                print(
+                    json.dumps(
+                        {
+                            "timestamp": datetime.now(tz=UTC).isoformat(),
+                            "level": "ERROR",
+                            "logger": "app.logging_setup",
+                            "message": (
+                                "DB log sink write failed - the Logs page will stop updating: "
+                                f"{type(exc).__name__}: {exc}"
+                            ),
+                        }
+                    ),
+                    file=sys.stderr,
+                    flush=True,
+                )
         finally:
             _log_queue.task_done()
 

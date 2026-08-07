@@ -610,6 +610,12 @@ PROVISION_HINTS: dict[str, str] = {
         "controller wants a different API call than sda/provisionDevices for this device type — "
         "capture that call from the browser's network tab."
     ),
+    "HTTP 403": (
+        " — the Catalyst Center account PnP Bridge authenticates as does not have permission to "
+        "provision. Provisioning needs a role with write access to Network Provision; a read-only "
+        "or observer role can claim and deploy templates but not provision. Fix it under System → "
+        "Users & Roles in Catalyst Center, on the account set in Settings → Catalyst Center."
+    ),
     "NCSO20070": (
         " — one or more AAA CLIs are already present on the device that Catalyst Center did not "
         "push. Remove them from the Day-0 template so provisioning owns them; the template's "
