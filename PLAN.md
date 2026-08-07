@@ -1391,3 +1391,24 @@ it. `ACCESS_PORTS` currently spans `Te1/0/37`–`1/0/47`, and several of those w
 `connected` in the operator's `show interface status`. Access config on a live
 uplink or trunk is what drops the session. Fixing the port list (or the template)
 should make the last two pass unchanged.
+
+## Deploy the disruptive templates last (v1.25.0) ✅
+
+The operator explained the topology: the switch's uplinks are **not cabled yet**,
+so it is still reached over the port PnP onboarded it through. The port template
+therefore reconfigures the very interface Catalyst Center is pushing across —
+the session dies, and every template after it fails with "Connection to device
+… timed out using protocol ssh2".
+
+Composite members are now ordered **safe first, interface-touching last**
+(`order_members`), so the banner, VLANs and everything else are already on the
+box before anything can drop the session. Relative order is preserved inside
+each group. A member counts as disruptive when its name contains port, uplink,
+interface, trunk, channel, dot1x or ise.
+
+`get_deployable_templates` now returns `(id, name, variables)` — the name was
+needed for the ordering, and failures read far better with it than with a UUID.
+
+- [x] `order_members` / `is_disruptive_template` + tests
+- [x] member names in errors and logs
+- [x] 253 pytest / 39 vitest / 4 e2e green

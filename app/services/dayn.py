@@ -658,6 +658,41 @@ def _task_detail(task: dict[str, Any], parent_reason: str = "") -> str:
     return " / ".join(parts)
 
 
+# Templates that reconfigure interfaces can cut the device's own management
+# path. A freshly onboarded switch is still reached over the port PnP used —
+# its uplinks are typically not cabled yet — so pushing port or uplink config
+# drops the SSH session Catalyst Center is holding, and every template after it
+# fails with "Connection to device ... timed out". Running them last means the
+# safe config is already on the box when that happens.
+DISRUPTIVE_TEMPLATE_WORDS: tuple[str, ...] = (
+    "port",
+    "uplink",
+    "interface",
+    "trunk",
+    "channel",
+    "dot1x",
+    "ise",
+)
+
+
+def is_disruptive_template(name: str) -> bool:
+    lowered = name.casefold()
+    return any(word in lowered for word in DISRUPTIVE_TEMPLATE_WORDS)
+
+
+def order_members(
+    members: list[tuple[str, str, list[str]]],
+) -> list[tuple[str, str, list[str]]]:
+    """Composite members, safe ones first, interface-touching ones last.
+
+    Relative order is preserved inside each group, so a composite's own
+    sequencing still holds for everything that does not risk the session.
+    """
+    safe = [m for m in members if not is_disruptive_template(m[1])]
+    disruptive = [m for m in members if is_disruptive_template(m[1])]
+    return safe + disruptive
+
+
 def _set_device(device_id: int, state: str, error: str | None = None) -> None:
     with open_session() as db:
         device = db.get(JobDevice, device_id)
@@ -827,7 +862,7 @@ async def _deploy_one(
     try:
         # A composite template must be deployed member by member, in order —
         # deploying the container itself pushes its member JSON to the device.
-        targets = await client.get_deployable_templates(template_id)
+        targets = order_members(await client.get_deployable_templates(template_id))
     except PnPBridgeError as exc:
         logger.error("Day-N failed for device", extra={"job_id": job_id, "serial": serial})
         _set_device(device_id, "dayn_failed", error=exc.message)
@@ -837,7 +872,7 @@ async def _deploy_one(
         _set_device(device_id, "dayn_failed", error=str(exc))
         return
 
-    for member_id, member_variables in targets:
+    for member_id, member_name, member_variables in targets:
         # Members are independent config blocks, so one failing must not cancel
         # the rest: a broken port template used to take the VLAN and banner
         # members down with it and leave the switch with neither. Every member
@@ -873,12 +908,17 @@ async def _deploy_one(
         except PnPBridgeError as exc:
             logger.error(
                 "Day-N template failed for device",
-                extra={"job_id": job_id, "serial": serial, "template_id": member_id},
+                extra={
+                    "job_id": job_id,
+                    "serial": serial,
+                    "template_id": member_id,
+                    "template_name": member_name,
+                },
             )
-            failures.append(f"{member_id}: {exc.message}")
+            failures.append(f"{member_name}: {exc.message}")
         except Exception as exc:  # per-device, per-member isolation
             logger.exception("Unexpected Day-N error", extra={"job_id": job_id})
-            failures.append(f"{member_id}: {exc}")
+            failures.append(f"{member_name}: {exc}")
 
     if failures:
         prefix = (

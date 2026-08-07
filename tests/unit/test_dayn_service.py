@@ -274,8 +274,16 @@ def test_composite_template_deploys_each_member_not_the_container(client: TestCl
                 "templateId": "tmpl-N",
                 "composite": True,
                 "containingTemplates": [
-                    {"id": "banner", "templateParams": [{"parameterName": "CONTACT"}]},
-                    {"id": "ports", "templateParams": [{"parameterName": "SNMP_LOCATION"}]},
+                    {
+                        "id": "banner",
+                        "name": "Banner",
+                        "templateParams": [{"parameterName": "CONTACT"}],
+                    },
+                    {
+                        "id": "ports",
+                        "name": "Ports",
+                        "templateParams": [{"parameterName": "SNMP_LOCATION"}],
+                    },
                 ],
             },
         )
@@ -456,9 +464,21 @@ def test_a_failing_member_no_longer_takes_the_other_templates_down(
                 "templateId": "tmpl-N",
                 "composite": True,
                 "containingTemplates": [
-                    {"id": "ports", "templateParams": [{"parameterName": "SNMP_LOCATION"}]},
-                    {"id": "vlans", "templateParams": [{"parameterName": "CONTACT"}]},
-                    {"id": "banner", "templateParams": [{"parameterName": "CONTACT"}]},
+                    {
+                        "id": "ports",
+                        "name": "Ports",
+                        "templateParams": [{"parameterName": "SNMP_LOCATION"}],
+                    },
+                    {
+                        "id": "vlans",
+                        "name": "VLANs",
+                        "templateParams": [{"parameterName": "CONTACT"}],
+                    },
+                    {
+                        "id": "banner",
+                        "name": "Banner",
+                        "templateParams": [{"parameterName": "CONTACT"}],
+                    },
                 ],
             },
         )
@@ -600,3 +620,40 @@ def test_batch_failure_surfaces_the_child_task_reasons() -> None:
     )
     # a child that succeeded contributes nothing
     assert _task_detail({"isError": False, "progress": "done"}) == ""
+
+
+def test_interface_touching_templates_are_deployed_last() -> None:
+    """A freshly onboarded switch is still reached over the port PnP used — its
+    uplinks are not cabled yet — so port/uplink config drops the very session
+    Catalyst Center is pushing through. Everything safe must land first."""
+    from app.services.dayn import order_members
+
+    members = [
+        ("t1", "IT_DayN_Port_Template", []),
+        ("t2", "Webasto Login Banner", []),
+        ("t3", "IT-DayN-Uplink_Conf", []),
+        ("t4", "IT_DayN_Vlan", []),
+    ]
+    assert [name for _, name, _ in order_members(members)] == [
+        "Webasto Login Banner",
+        "IT_DayN_Vlan",
+        "IT_DayN_Port_Template",
+        "IT-DayN-Uplink_Conf",
+    ]
+
+
+def test_ordering_keeps_relative_order_inside_each_group() -> None:
+    from app.services.dayn import order_members
+
+    members = [
+        ("a", "AAA Servers", []),
+        ("b", "Port Config", []),
+        ("c", "Banner", []),
+        ("d", "Uplink Config", []),
+    ]
+    assert [n for _, n, _ in order_members(members)] == [
+        "AAA Servers",
+        "Banner",
+        "Port Config",
+        "Uplink Config",
+    ]
