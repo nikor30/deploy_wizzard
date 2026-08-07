@@ -436,3 +436,33 @@ async def test_non_sda_devices_are_assigned_to_the_site_not_fabric_provisioned()
         "deviceIds": ["dev-1"],
         "siteId": "bldg-3",
     }
+
+
+async def test_403_forces_one_token_refresh_so_a_role_change_takes_effect() -> None:
+    """A CCC token carries the account's role at issue time. After granting the
+    account provisioning rights, the cached token keeps 403-ing for the rest of
+    its ~55-minute life unless it is reissued."""
+    with respx.mock as respx_mock:
+        token = respx_mock.post(TOKEN_URL).respond(200, json={"Token": "t"})
+        respx_mock.get(SITE_URL).mock(
+            side_effect=[
+                httpx.Response(403, json={"message": "Role does not have valid permissions"}),
+                httpx.Response(200, json={"response": []}),
+            ]
+        )
+        async with CatalystCenterClient(BASE, "admin", "pw") as client:
+            await client.get_sites()
+
+    assert token.call_count == 2, "the 403 must trigger exactly one forced refresh"
+
+
+async def test_403_after_a_fresh_token_is_reported_as_a_role_problem() -> None:
+    with respx.mock as respx_mock:
+        respx_mock.post(TOKEN_URL).respond(200, json={"Token": "t"})
+        respx_mock.get(SITE_URL).respond(403, json={"message": "no permission"})
+        async with CatalystCenterClient(BASE, "admin", "pw") as client:
+            with pytest.raises(CatalystAuthError) as excinfo:
+                await client.get_sites()
+
+    assert "Users & Roles" in str(excinfo.value)
+    assert "freshly" in str(excinfo.value)

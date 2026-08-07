@@ -1350,3 +1350,17 @@ well as to task failures.
 - [x] `HTTP 403` hint + test; applied to HTTP errors too
 - [x] retention guard; sink-failure visibility
 - [x] 247 pytest / 39 vitest / 4 e2e green
+
+## Reissue the token on 403 so a role change takes effect (v1.23.1) ✅
+
+The operator granted `apisync` SUPER-ADMIN-ROLE (it held NETWORK-ADMIN-ROLE).
+A Catalyst Center token carries the account's role **at issue time**, and the
+client caches one for ~55 minutes — so a freshly granted permission would have
+kept failing with 403 until the cached token aged out.
+
+`_request` now forces one token reissue on 403 as well as 401. A 403 that
+survives a fresh token is reported as a role problem, naming System → Users &
+Roles, rather than being retried forever.
+
+- [x] 401/403 refresh-retry + tests for both the recovery and the role case
+- [x] 249 pytest / 39 vitest / 4 e2e green
