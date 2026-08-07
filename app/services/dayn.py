@@ -593,15 +593,19 @@ PROVISION_HINTS: dict[str, str] = {
     # Seen on a live 2.3.7 controller: "Assigning Devices to Sites" succeeds,
     # then "Provisioning assigned Devices" fails with this code.
     "NCHS20057": (
-        " — Catalyst Center refuses to provision a device that already carries AAA/TACACS/RADIUS "
-        "CLI it did not push itself. If your Day-0 onboarding template configures AAA, remove "
-        "those lines from it and let the site's network settings supply them during provisioning "
-        "(that is the config you are trying to get onto the box in the first place). Provisioning "
-        "the same device once in the Catalyst Center GUI shows the conflicting commands by name."
+        " — Catalyst Center refuses to provision a device that already carries network-settings "
+        "CLI it did not push itself. Those settings are AAA/TACACS/RADIUS, SNMP, syslog, NTP, DNS "
+        "and DHCP — so `snmp-server community`, `snmp-server trap-source`, `logging host`, "
+        "`logging trap` and `logging source-interface` in a Day-0 onboarding template conflict "
+        "just as much as AAA does. Open the template in Catalyst Center and use its "
+        "**Provision Conflicts** tab: it names the conflicting commands directly. Remove those "
+        "lines from the Day-0 template and let provisioning supply them from the site's network "
+        "settings — that is the config you want on the switch in the first place."
     ),
     "NCSO20070": (
-        " — one or more AAA CLIs are already present on the device. Same cause as NCHS20057: "
-        "remove AAA from the Day-0 template so provisioning owns it."
+        " — one or more AAA CLIs are already present on the device. Same cause as NCHS20057: the "
+        "device carries network-settings CLI Catalyst Center does not own. See the template's "
+        "Provision Conflicts tab."
     ),
 }
 
