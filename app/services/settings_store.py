@@ -131,16 +131,18 @@ def access_port_source(db: Session) -> str:
     return row.value if row is not None and row.value in ("netbox", "device") else "netbox"
 
 
-PROVISION_METHODS: tuple[str, ...] = ("assign", "sda")
+PROVISION_METHODS: tuple[str, ...] = ("wired", "assign", "sda")
 
 
 def provision_method(db: Session) -> str:
     """How a claimed device is attached to its site.
 
-    "assign" (default) uses networkDevices/assignToSite — the non-SDA path,
-    where Device Controllability pushes the site's network settings. "sda" uses
-    sda/provisionDevices, which additionally runs the fabric provisioning step
-    and is rejected on a non-fabric switch.
+    "wired" (default) uses business/sda/provision-device — the classic wired
+    provisioning call the GUI's Provision action uses, taking a management IP
+    and a site name hierarchy. "assign" uses networkDevices/assignToSite, which
+    attaches the device and leaves the config push to Device Controllability.
+    "sda" uses sda/provisionDevices, which additionally runs the fabric step and
+    is rejected on a non-fabric switch with NCHS20057.
     """
     row = db.get(AppSetting, "provision_method")
-    return row.value if row is not None and row.value in PROVISION_METHODS else "assign"
+    return row.value if row is not None and row.value in PROVISION_METHODS else "wired"

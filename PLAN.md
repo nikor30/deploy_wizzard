@@ -1286,3 +1286,27 @@ Controllability is what pushes the site's SNMP, syslog, NTP and AAA settings.
 - [x] `assign_device_to_site()` + `provision_method` flag (store/API/UI)
 - [x] Mock CCC gained the assign endpoint; unit + integration tests
 - [x] 246 pytest / 39 vitest / 4 e2e green
+
+## "Provision Wired Device" — the call the GUI actually uses (v1.22.0) ✅
+
+The operator confirmed the **GUI** provisions this switch end to end, producing
+SNMP/TACACS/RADIUS, and that network settings are complete at Global and at
+`Stockdorf - STO/Building 3/U3`. So the site is fine and the API path is wrong.
+
+`POST /dna/intent/api/v1/business/sda/provision-device` takes
+`{deviceManagementIpAddress, siteNameHierarchy}` — a management IP and a site
+*path string*, not UUIDs — and is the classic wired provisioning call (PUT
+re-provisions). The `business/sda` segment is historical; it predates the
+fabric-specific `sda/provisionDevices` and is what wired provisioning has always
+used. Now the default method.
+
+Settings → Provisioning offers three: **Provision wired device** (default),
+**Assign to site**, **SDA provision**.
+
+- [x] `provision_wired_device()` + `provision_method` default "wired"
+- [x] Mock CCC gained POST/PUT provision-device; tests updated
+- [x] 246 pytest / 39 vitest / 4 e2e green
+
+**Note for the operator:** Device Controllability lives at System → Settings →
+Device Settings → Device Controllability in 2.3.7, not under Design → Network
+Settings.

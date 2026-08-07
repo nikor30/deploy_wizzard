@@ -440,7 +440,7 @@ async def _provision_to_site(
     device_id: int,
     poll_interval: float,
     device_timeout: float,
-    method: str = "assign",
+    method: str = "wired",
 ) -> str | None:
     """Provision the claimed device to its site; returns an error or None.
 
@@ -455,6 +455,7 @@ async def _provision_to_site(
             return None
         serial = device.serial
         site_id = device.ccc_site_id
+        site_name = device.ccc_site_name
         ip = (device.mgmt_ip or "").split("/")[0]
     if not site_id:
         return "No Catalyst Center site resolved for this device — cannot provision."
@@ -468,7 +469,12 @@ async def _provision_to_site(
             f"Device {ip} is not in the Catalyst Center inventory yet, so it cannot be "
             "provisioned. Network settings (AAA/RADIUS/DNS/DHCP) were NOT applied."
         )
-    if method == "assign":
+    if method == "wired":
+        # Classic wired provisioning: management IP + site name hierarchy.
+        if not site_name:
+            return "No Catalyst Center site name for this device — cannot provision."
+        response = await client.provision_wired_device(ip, site_name)
+    elif method == "assign":
         # Non-SDA: assignment is the operation. Device Controllability then
         # pushes the site's network settings.
         response = await client.assign_device_to_site(site_id, uuid)
@@ -498,7 +504,7 @@ async def _claim_one(
     poll_interval: float,
     device_timeout: float,
     provision: bool,
-    provision_method: str = "assign",
+    provision_method: str = "wired",
 ) -> None:
     ccc_device_id = payload["deviceId"]
     _set_device_state(device_id, "claiming")

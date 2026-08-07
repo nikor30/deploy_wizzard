@@ -276,15 +276,14 @@ def test_provisioning_is_off_by_default(configured_client: TestClient, mock: htt
     assert mock.get("/__mock__/state").json()["provisioned"] == []
 
 
-def test_non_sda_assignment_is_the_default_site_attachment(
+def test_wired_provisioning_is_the_default_site_attachment(
     configured_client: TestClient, mock: httpx.Client
 ) -> None:
-    """Default is the non-SDA path: assign the device to its site and let Device
-    Controllability push the network settings, rather than running the fabric
-    provisioning step a plain access switch has no business in."""
+    """Default is the classic wired provisioning call the GUI uses, not the
+    fabric one a plain access switch is rejected by."""
     client = configured_client
     flags = client.get("/api/settings/flags").json()
-    assert flags["provision_method"] == "assign"
+    assert flags["provision_method"] == "wired"
     client.put("/api/settings/flags", json={**flags, "provision_after_claim": True})
 
     job = _create_matched_job(client)

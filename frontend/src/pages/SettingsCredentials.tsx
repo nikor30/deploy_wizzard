@@ -182,7 +182,7 @@ export default function SettingsCredentials() {
   const [provision, setProvision] = useState(false)
   const [trace, setTrace] = useState(false)
   const [portSource, setPortSource] = useState('netbox')
-  const [provMethod, setProvMethod] = useState('assign')
+  const [provMethod, setProvMethod] = useState('wired')
   const [pnpStates, setPnpStates] = useState<string[]>(DEFAULT_PNP_STATES)
   // kept as the raw comma-separated text so typing a comma isn't fought with
   const [day0Filter, setDay0Filter] = useState('')
@@ -202,7 +202,7 @@ export default function SettingsCredentials() {
         setProvision(f.provision_after_claim ?? false)
         setTrace(f.http_trace ?? false)
         setPortSource(f.access_port_source ?? 'netbox')
-        setProvMethod(f.provision_method ?? 'assign')
+        setProvMethod(f.provision_method ?? 'wired')
       })
       .catch(() => setDebug(false))
   }, [])
@@ -565,6 +565,21 @@ export default function SettingsCredentials() {
             />
           </div>
           <div className="mt-4 flex flex-col gap-2">
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                name="provision-method"
+                id="provision-wired"
+                className="mt-1"
+                checked={provMethod === 'wired'}
+                onChange={() => void changeProvMethod('wired')}
+              />
+              <span>
+                <strong>Provision wired device</strong> &mdash; the classic wired provisioning call,
+                the one behind the GUI&rsquo;s Provision action. Takes the management IP and the
+                site name hierarchy. Start here for a normal switch.
+              </span>
+            </label>
             <label className="flex items-start gap-2 text-sm">
               <input
                 type="radio"
