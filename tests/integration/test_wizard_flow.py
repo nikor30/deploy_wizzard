@@ -274,3 +274,23 @@ def test_provisioning_is_off_by_default(configured_client: TestClient, mock: htt
     job = client.get(f"/api/wizard/jobs/{job['id']}").json()
     assert all(d["state"] == "success" for d in job["devices"])
     assert mock.get("/__mock__/state").json()["provisioned"] == []
+
+
+def test_non_sda_assignment_is_the_default_site_attachment(
+    configured_client: TestClient, mock: httpx.Client
+) -> None:
+    """Default is the non-SDA path: assign the device to its site and let Device
+    Controllability push the network settings, rather than running the fabric
+    provisioning step a plain access switch has no business in."""
+    client = configured_client
+    flags = client.get("/api/settings/flags").json()
+    assert flags["provision_method"] == "assign"
+    client.put("/api/settings/flags", json={**flags, "provision_after_claim": True})
+
+    job = _create_matched_job(client)
+    client.post(f"/api/wizard/jobs/{job['id']}/claim", json={"config_id": "tpl-day0", **FAST})
+
+    job = client.get(f"/api/wizard/jobs/{job['id']}").json()
+    assert all(d["state"] == "success" for d in job["devices"])
+    assert not job["devices"][0]["error"], "assignment succeeds, so no warning"
+    assert len(mock.get("/__mock__/state").json()["provisioned"]) == len(job["devices"])

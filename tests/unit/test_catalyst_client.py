@@ -417,3 +417,22 @@ async def test_a_building_site_is_passed_through_untouched() -> None:
     assert json.loads(post.calls[0].request.content) == [
         {"siteId": "bldg-3", "networkDeviceId": "dev-1"}
     ]
+
+
+async def test_non_sda_devices_are_assigned_to_the_site_not_fabric_provisioned() -> None:
+    """sda/provisionDevices runs two children: "Assigning Devices to Sites" then
+    "Provisioning assigned Devices". On a non-fabric switch the first succeeds
+    and the second is rejected — it is the fabric half. Assignment alone is the
+    non-SDA path; Device Controllability then pushes the site's settings."""
+    with respx.mock as respx_mock:
+        respx_mock.post(TOKEN_URL).respond(200, json={"Token": "t"})
+        assign = respx_mock.post(
+            f"{BASE}/dna/intent/api/v1/networkDevices/assignToSite/apply"
+        ).respond(202, json={"response": {"taskId": "task-1"}})
+        async with CatalystCenterClient(BASE, "admin", "pw") as client:
+            await client.assign_device_to_site("bldg-3", "dev-1")
+
+    assert json.loads(assign.calls[0].request.content) == {
+        "deviceIds": ["dev-1"],
+        "siteId": "bldg-3",
+    }

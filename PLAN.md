@@ -1266,3 +1266,23 @@ different API call for this device type.
 - [x] `PROVISION_HINTS["NCHS20057"]` rewritten; test asserts it does **not**
       re-assert the disproven cause
 - [x] 244 pytest / 39 vitest / 4 e2e green
+
+## Non-SDA site attachment: assign, don't fabric-provision (v1.21.0) ✅
+
+The operator's observation settled it: this is not SDA. `sda/provisionDevices`
+runs two children — `Assigning Devices to Sites`, then `Provisioning assigned
+Devices`. On a non-fabric switch the first succeeds and the second is rejected
+with `NCHS20057`, because the second **is** the fabric step.
+
+For a non-fabric device the assignment is the operation. Cisco's "Assign network
+devices to a site" reference: *"If device controllability is enabled, it will be
+triggered once the device is assigned to the site successfully."* Device
+Controllability is what pushes the site's SNMP, syslog, NTP and AAA settings.
+
+`POST /dna/intent/api/v1/networkDevices/assignToSite/apply` with
+`{deviceIds, siteId}` returns a task. Settings → Provisioning now offers
+**Assign to site** (default) or **SDA provision**.
+
+- [x] `assign_device_to_site()` + `provision_method` flag (store/API/UI)
+- [x] Mock CCC gained the assign endpoint; unit + integration tests
+- [x] 246 pytest / 39 vitest / 4 e2e green

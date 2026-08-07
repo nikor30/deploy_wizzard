@@ -29,6 +29,7 @@ interface AppFlags {
   provision_after_claim?: boolean
   http_trace?: boolean
   access_port_source?: string
+  provision_method?: string
 }
 
 /** "onboard, webasto" -> ["onboard", "webasto"] (blanks dropped) */
@@ -181,6 +182,7 @@ export default function SettingsCredentials() {
   const [provision, setProvision] = useState(false)
   const [trace, setTrace] = useState(false)
   const [portSource, setPortSource] = useState('netbox')
+  const [provMethod, setProvMethod] = useState('assign')
   const [pnpStates, setPnpStates] = useState<string[]>(DEFAULT_PNP_STATES)
   // kept as the raw comma-separated text so typing a comma isn't fought with
   const [day0Filter, setDay0Filter] = useState('')
@@ -200,6 +202,7 @@ export default function SettingsCredentials() {
         setProvision(f.provision_after_claim ?? false)
         setTrace(f.http_trace ?? false)
         setPortSource(f.access_port_source ?? 'netbox')
+        setProvMethod(f.provision_method ?? 'assign')
       })
       .catch(() => setDebug(false))
   }, [])
@@ -216,6 +219,7 @@ export default function SettingsCredentials() {
         provision_after_claim: provision,
         http_trace: trace,
         access_port_source: portSource,
+        provision_method: provMethod,
         ...next,
       }),
     })
@@ -233,6 +237,12 @@ export default function SettingsCredentials() {
   const toggleTrace = async (value: boolean) => {
     setTrace(value)
     await putFlags({ http_trace: value }).catch(() => setTrace(!value))
+  }
+
+  const changeProvMethod = async (value: string) => {
+    const previous = provMethod
+    setProvMethod(value)
+    await putFlags({ provision_method: value }).catch(() => setProvMethod(previous))
   }
 
   const changePortSource = async (value: string) => {
@@ -553,6 +563,38 @@ export default function SettingsCredentials() {
               checked={provision}
               onChange={(v) => void toggleProvision(v)}
             />
+          </div>
+          <div className="mt-4 flex flex-col gap-2">
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                name="provision-method"
+                id="provision-assign"
+                className="mt-1"
+                checked={provMethod === 'assign'}
+                onChange={() => void changeProvMethod('assign')}
+              />
+              <span>
+                <strong>Assign to site</strong> &mdash; the non-SDA path. Catalyst Center pushes the
+                site&rsquo;s network settings when the device is assigned, provided{' '}
+                <em>Device Controllability</em> is enabled under Design &rarr; Network Settings.
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                name="provision-method"
+                id="provision-sda"
+                className="mt-1"
+                checked={provMethod === 'sda'}
+                onChange={() => void changeProvMethod('sda')}
+              />
+              <span>
+                <strong>SDA provision</strong> &mdash; also runs the fabric provisioning step. A
+                non-fabric switch is rejected there with <code>NCHS20057</code>, so only use this
+                for fabric devices.
+              </span>
+            </label>
           </div>
         </section>
 

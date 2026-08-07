@@ -404,6 +404,32 @@ class CatalystCenterClient:
             json={"networkdevice": [device_uuid]},
         )
 
+    async def assign_device_to_site(self, site_id: str, device_uuid: str) -> dict[str, Any]:
+        """Assign a device to a site — the **non-SDA** path to site settings.
+
+        `sda/provisionDevices` runs two child operations: "Assigning Devices to
+        Sites" and then "Provisioning assigned Devices". On a non-fabric switch
+        the first succeeds and the second is rejected (NCHS20057) — it is the
+        SDA-specific half, and a plain access switch has no business there.
+
+        For a non-fabric device the assignment *is* the operation: with **Device
+        Controllability** enabled (Design → Network Settings → Device
+        Controllability), Catalyst Center pushes the site's network settings —
+        SNMP, syslog, NTP, AAA — when the device is assigned. Cisco's
+        "Assign network devices to a site" reference states it: "If device
+        controllability is enabled, it will be triggered once the device is
+        assigned to the site successfully."
+
+        `POST /dna/intent/api/v1/networkDevices/assignToSite/apply` takes
+        `{deviceIds, siteId}` and answers with a task.
+        """
+        response = await self._request(
+            "POST",
+            "/dna/intent/api/v1/networkDevices/assignToSite/apply",
+            json={"deviceIds": [device_uuid], "siteId": site_id},
+        )
+        return dict(response.json())
+
     async def get_provisioned_device(self, device_uuid: str) -> dict[str, Any] | None:
         """The device's existing provisioning record, or None if it has none.
 
