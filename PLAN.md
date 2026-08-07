@@ -1310,3 +1310,19 @@ Settings → Provisioning offers three: **Provision wired device** (default),
 **Note for the operator:** Device Controllability lives at System → Settings →
 Device Settings → Device Controllability in 2.3.7, not under Design → Network
 Settings.
+
+## Correct the Device Controllability claim (v1.22.1) ✅
+
+v1.21.0 said Device Controllability pushes the site's AAA settings when a device
+is assigned. Cisco's own Device Controllability page lists what assignment
+actually pushes — wired endpoint data collection, controller certificates, SNMP
+trap and syslog server definitions, application visibility/QoS, wireless
+telemetry — and **AAA/TACACS/RADIUS are not on it**. The page then states the
+telemetry settings "are pushed when the device is provisioned".
+
+So "Assign to site" can never deliver a switch's AAA config; only a provision
+can. Corrected in the client docstring, the settings store and the Settings page
+so the option is not chosen on a false promise. This also confirms v1.22.0's
+default (`business/sda/provision-device`) is the right one.
+
+- [x] 246 pytest / 39 vitest green

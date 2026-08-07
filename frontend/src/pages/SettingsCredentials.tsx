@@ -590,9 +590,10 @@ export default function SettingsCredentials() {
                 onChange={() => void changeProvMethod('assign')}
               />
               <span>
-                <strong>Assign to site</strong> &mdash; the non-SDA path. Catalyst Center pushes the
-                site&rsquo;s network settings when the device is assigned, provided{' '}
-                <em>Device Controllability</em> is enabled under Design &rarr; Network Settings.
+                <strong>Assign to site</strong> &mdash; attaches the device without provisioning it.
+                With <em>Device Controllability</em> on (System &rarr; Settings &rarr; Device
+                Settings) this pushes SNMP traps, syslog and telemetry, but <strong>not</strong>{' '}
+                AAA/TACACS/RADIUS &mdash; those come from provisioning.
               </span>
             </label>
             <label className="flex items-start gap-2 text-sm">
