@@ -19,7 +19,14 @@ from app.db.models import Job, JobDevice, ServiceSettings, TemplateSecret, Webho
 from app.db.session import open_session
 from app.errors import ConfigurationError, PnPBridgeError, TaskTimeout
 from app.services import settings_store
-from app.services.dayn import SECRET, SECRET_MASK, hidden_variable, poll_task, resolve_path
+from app.services.dayn import (
+    SECRET,
+    SECRET_MASK,
+    hidden_variable,
+    poll_task,
+    provision_hint,
+    resolve_path,
+)
 from app.services.matching import MATCHED
 
 logger = logging.getLogger(__name__)
@@ -549,7 +556,9 @@ async def _claim_one(
                 client, job_id, device_id, poll_interval, device_timeout, provision_method
             )
         except PnPBridgeError as exc:
-            provision_warning = exc.message
+            # A 403 comes back from the HTTP call, not from a task, so the hint
+            # has to be applied here as well as in poll_task.
+            provision_warning = exc.message + provision_hint(exc.message)
         except Exception as exc:  # per-device isolation
             logger.exception("Unexpected provisioning error", extra={"job_id": job_id})
             provision_warning = str(exc)

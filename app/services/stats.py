@@ -98,6 +98,15 @@ def collect_stats(days: int) -> dict[str, Any]:
 
 def cleanup_old_logs(retention_days: int = DEFAULT_RETENTION_DAYS) -> int:
     """Delete log entries older than the retention window; returns rows removed."""
+    if retention_days < 1:
+        # A zero or negative window makes the cutoff "now" and deletes the whole
+        # log, which is never what an operator means by a retention setting.
+        logger.error(
+            "Refusing to run log retention with retention_days=%d — that would delete every "
+            "entry. Set PNPB_LOG_RETENTION_DAYS to 1 or more.",
+            retention_days,
+        )
+        return 0
     cutoff = datetime.now(tz=UTC) - timedelta(days=retention_days)
     with open_session() as db:
         cursor = db.execute(delete(LogEntry).where(LogEntry.timestamp < cutoff))

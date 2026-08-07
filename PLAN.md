@@ -1326,3 +1326,27 @@ so the option is not chosen on a false promise. This also confirms v1.22.0's
 default (`business/sda/provision-device`) is the right one.
 
 - [x] 246 pytest / 39 vitest green
+
+## The provisioning blocker is permissions, not the endpoint (v1.23.0) ✅
+
+`business/sda/provision-device` answered **HTTP 403 — "Role does not have valid
+permissions to access the API."** The endpoint is right; the Catalyst Center
+account PnP Bridge authenticates as cannot provision. The GUI works because the
+operator's own account has the role. Every earlier NCHS20057 chase was the wrong
+endpoint *and* an account that could not have provisioned anyway.
+
+`provision_hint` gained an `HTTP 403` entry naming the account and where to fix
+it (System → Users & Roles), applied to HTTP errors in `_provision_to_site` as
+well as to task failures.
+
+**Two log-sink defects found while investigating an empty Logs page:**
+
+* `cleanup_old_logs` with `retention_days < 1` set the cutoff to *now* and would
+  delete every entry. It now refuses and logs an error.
+* A failing DB sink write was swallowed entirely, so the Logs page silently
+  stopped updating while the app looked healthy. The first failure now prints a
+  structured ERROR to stderr.
+
+- [x] `HTTP 403` hint + test; applied to HTTP errors too
+- [x] retention guard; sink-failure visibility
+- [x] 247 pytest / 39 vitest / 4 e2e green
