@@ -466,3 +466,35 @@ async def test_403_after_a_fresh_token_is_reported_as_a_role_problem() -> None:
 
     assert "Users & Roles" in str(excinfo.value)
     assert "freshly" in str(excinfo.value)
+
+
+async def test_error_detail_falls_back_to_the_raw_body() -> None:
+    """Reading only message/response produced "failed with HTTP 400." with no
+    reason at all, because CCC does not use one consistent error shape."""
+    with respx.mock as respx_mock:
+        respx_mock.post(TOKEN_URL).respond(200, json={"Token": "t"})
+        respx_mock.get(SITE_URL).respond(400, json={"errorCode": "NCND1234", "reason": "bad site"})
+        async with CatalystCenterClient(BASE, "admin", "pw") as client:
+            with pytest.raises(CatalystError) as excinfo:
+                await client.get_sites()
+    # neither key is one we look for by name, so the whole body must survive
+    assert "NCND1234" in str(excinfo.value)
+    assert "bad site" in str(excinfo.value)
+
+
+async def test_a_400_on_provision_retries_as_a_re_provision() -> None:
+    """POST creates a provisioning; a device that already has one — every retry
+    after the first — is rejected with 400. Re-provisioning is a PUT."""
+    path = f"{BASE}/dna/intent/api/v1/business/sda/provision-device"
+    with respx.mock as respx_mock:
+        respx_mock.post(TOKEN_URL).respond(200, json={"Token": "t"})
+        post = respx_mock.post(path).respond(400, json={"message": "already provisioned"})
+        put = respx_mock.put(path).respond(202, json={"response": {"taskId": "task-1"}})
+        async with CatalystCenterClient(BASE, "admin", "pw") as client:
+            await client.provision_wired_device("172.20.10.145", "Global/STO/B3/U3")
+
+    assert post.called and put.called
+    assert json.loads(put.calls[0].request.content) == {
+        "deviceManagementIpAddress": "172.20.10.145",
+        "siteNameHierarchy": "Global/STO/B3/U3",
+    }
