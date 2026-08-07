@@ -1225,3 +1225,19 @@ exactly that on the box, so provisioning refuses to take ownership.
       generic reason no longer buries its own `errorCode`
 - [x] `provision_hint()` for NCHS20057 / NCSO20070 with the remedy
 - [x] 244 pytest / 39 vitest / 4 e2e green
+
+## The conflict is not AAA-specific (v1.20.1) ✅
+
+The user's Day-0 template (`00_Webasto_OnBoarding` v52) contains no AAA or
+TACACS at all — the v1.20.0 hint named the wrong commands. It does contain
+`snmp-server community`, `snmp-server trap-source`, `logging trap`,
+`logging source-interface` and `logging host`, and **SNMP and syslog are
+Design → Network Settings items exactly like AAA**. Same conflict class,
+different commands.
+
+The hint now names the whole network-settings set and points at Catalyst
+Center's own **Provision Conflicts** tab on the template, which lists the
+offending commands directly instead of anyone guessing.
+
+- [x] `PROVISION_HINTS["NCHS20057"]` covers SNMP/syslog/NTP/DNS/DHCP + the tab
+- [x] 244 pytest / 39 vitest / 4 e2e green
