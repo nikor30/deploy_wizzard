@@ -139,8 +139,9 @@ def provision_method(db: Session) -> str:
 
     "wired" (default) uses business/sda/provision-device — the classic wired
     provisioning call the GUI's Provision action uses, taking a management IP
-    and a site name hierarchy. "assign" uses networkDevices/assignToSite, which
-    attaches the device and leaves the config push to Device Controllability.
+    and a site name hierarchy. "assign" uses networkDevices/assignToSite, which attaches the
+    device and pushes only what Device Controllability covers at assignment
+    time — SNMP traps, syslog, telemetry — NOT AAA/TACACS/RADIUS.
     "sda" uses sda/provisionDevices, which additionally runs the fabric step and
     is rejected on a non-fabric switch with NCHS20057.
     """

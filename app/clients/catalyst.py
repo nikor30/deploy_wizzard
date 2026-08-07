@@ -436,13 +436,16 @@ class CatalystCenterClient:
         the first succeeds and the second is rejected (NCHS20057) — it is the
         SDA-specific half, and a plain access switch has no business there.
 
-        For a non-fabric device the assignment *is* the operation: with **Device
-        Controllability** enabled (Design → Network Settings → Device
-        Controllability), Catalyst Center pushes the site's network settings —
-        SNMP, syslog, NTP, AAA — when the device is assigned. Cisco's
-        "Assign network devices to a site" reference states it: "If device
-        controllability is enabled, it will be triggered once the device is
-        assigned to the site successfully."
+        With **Device Controllability** enabled (System → Settings → Device
+        Settings), assignment pushes *part* of the site's settings: SNMP trap
+        and syslog server definitions, wired endpoint data collection,
+        application visibility. It does **not** push AAA/TACACS/RADIUS — that
+        list is telemetry, and Cisco's own Device Controllability page says the
+        telemetry settings "are pushed when the device is provisioned".
+
+        So assignment alone will not give a switch its AAA config. Use
+        `provision_wired_device()` for that; this call is for attaching a device
+        to a site without provisioning it.
 
         `POST /dna/intent/api/v1/networkDevices/assignToSite/apply` takes
         `{deviceIds, siteId}` and answers with a task.
