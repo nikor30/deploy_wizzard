@@ -2,8 +2,9 @@
 
 Auth: POST /dna/system/api/v1/auth/token with HTTP Basic -> Token, sent as
 X-Auth-Token. Tokens live ~60 min; we refresh proactively at 55 min and on a
-401 exactly once, serialized behind an async lock. All requests share a global
-5-connection semaphore (CCC rate limit).
+401 or 403 exactly once (a token carries the account's role at issue time, so a
+role change needs a reissue), serialized behind an async lock. All requests
+share a global 5-connection semaphore (CCC rate limit).
 """
 
 import asyncio
@@ -160,16 +161,28 @@ class CatalystCenterClient:
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | list[dict[str, Any]] | None = None,
     ) -> httpx.Response:
-        """Authenticated request with 401-refresh-retry exactly once."""
+        """Authenticated request with 401/403-refresh-retry exactly once."""
         token = await self._get_token()
         response = await self._send(method, path, token, params, json)
-        if response.status_code == 401:
+        # 403 as well as 401: a Catalyst Center token carries the account's role
+        # at issue time, so a role change (e.g. granting provisioning rights)
+        # keeps failing with 403 for the rest of the token's ~55-minute life.
+        # One forced refresh picks the new role up immediately.
+        if response.status_code in (401, 403):
+            previous = response.status_code
             token = await self._get_token(force_refresh=True)
             response = await self._send(method, path, token, params, json)
             if response.status_code == 401:
                 raise CatalystAuthError(
                     "Catalyst Center returned 401 even after a token refresh. "
                     "Check the credentials in Settings."
+                )
+            if response.status_code == 403 and previous == 403:
+                raise CatalystAuthError(
+                    f"Catalyst Center returned 403 for {method} {path} even with a freshly "
+                    "issued token, so this is the account's role rather than a stale token. "
+                    "Grant the account in Settings → Catalyst Center a role with write access "
+                    "to the API it needs (System → Users & Roles)."
                 )
         trace_http(method, path, json, response, service="catalyst")
         if response.status_code >= 400:
