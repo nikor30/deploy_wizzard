@@ -52,6 +52,34 @@ PNP_SELECTABLE_STATES: tuple[str, ...] = (
 )
 
 
+# How much of an unrecognised error body to keep in the message.
+ERROR_BODY_LIMIT = 600
+
+
+def _error_detail(response: httpx.Response) -> str:
+    """The reason Catalyst Center gave, whatever key it used.
+
+    Reading only `message`/`response` produced errors like "failed with HTTP
+    400." with no reason at all, because CCC does not use one consistent shape.
+    Known keys are tried first; anything else falls back to the raw body, which
+    is always better than nothing.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        text = response.text.strip()
+        return f" — {text[:ERROR_BODY_LIMIT]}" if text else ""
+    if isinstance(body, dict):
+        for key in ("message", "detail", "errorMessage", "error", "response", "errors"):
+            value = body.get(key)
+            if isinstance(value, str) and value.strip():
+                return f" — {value.strip()[:ERROR_BODY_LIMIT]}"
+            if value:  # nested object/list: show it rather than drop it
+                return f" — {str(value)[:ERROR_BODY_LIMIT]}"
+    rendered = str(body).strip()
+    return f" — {rendered[:ERROR_BODY_LIMIT]}" if rendered and rendered != "{}" else ""
+
+
 def _template_params(template: dict[str, Any]) -> list[str]:
     """Variable names from a template payload, de-duplicated in order.
 
@@ -186,14 +214,9 @@ class CatalystCenterClient:
                 )
         trace_http(method, path, json, response, service="catalyst")
         if response.status_code >= 400:
-            detail = ""
-            try:
-                body = response.json()
-                detail = f" — {body.get('message') or body.get('response') or ''}".rstrip(" —")
-            except ValueError:
-                pass
             raise CatalystError(
-                f"Catalyst Center {method} {path} failed with HTTP {response.status_code}{detail}."
+                f"Catalyst Center {method} {path} failed with "
+                f"HTTP {response.status_code}{_error_detail(response)}."
             )
         return response
 
@@ -431,14 +454,26 @@ class CatalystCenterClient:
 
         POST provisions, PUT re-provisions an already-provisioned device.
         """
-        response = await self._request(
-            "PUT" if reprovision else "POST",
-            "/dna/intent/api/v1/business/sda/provision-device",
-            json={
-                "deviceManagementIpAddress": mgmt_ip,
-                "siteNameHierarchy": site_name_hierarchy,
-            },
-        )
+        payload = {
+            "deviceManagementIpAddress": mgmt_ip,
+            "siteNameHierarchy": site_name_hierarchy,
+        }
+        path = "/dna/intent/api/v1/business/sda/provision-device"
+        if reprovision:
+            response = await self._request("PUT", path, json=payload)
+            return dict(response.json())
+        try:
+            response = await self._request("POST", path, json=payload)
+        except CatalystError as exc:
+            # POST creates a provisioning; a device that already has one (every
+            # retry after the first, and anything provisioned in the GUI) is
+            # rejected with 400. Re-provisioning is a PUT to the same path.
+            if "HTTP 400" not in str(exc):
+                raise
+            logger.info(
+                "Provision POST rejected with 400 for %s — re-provisioning with PUT", mgmt_ip
+            )
+            response = await self._request("PUT", path, json=payload)
         return dict(response.json())
 
     async def assign_device_to_site(self, site_id: str, device_uuid: str) -> dict[str, Any]:

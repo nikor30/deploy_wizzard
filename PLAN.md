@@ -1364,3 +1364,30 @@ Roles, rather than being retried forever.
 
 - [x] 401/403 refresh-retry + tests for both the recovery and the role case
 - [x] 249 pytest / 39 vitest / 4 e2e green
+
+## Two self-inflicted blind spots (v1.24.0) ✅
+
+The 403 is gone (the role change worked) and provisioning now returns **400 with
+no reason at all** — "failed with HTTP 400. —". That emptiness was ours:
+`_request` read only `message`/`response` from the error body and silently
+dropped anything else. `_error_detail()` now tries the known keys and falls back
+to the raw body, so CCC's reason always survives.
+
+And the 400 itself is very likely ours too: `provision_wired_device` accepted a
+`reprovision` flag that **nothing ever set**, so every call was a POST. POST
+*creates* a provisioning; a device that already has one — every retry after the
+first, and anything provisioned in the GUI — is rejected with 400. A 400 now
+retries once as PUT.
+
+- [x] `_error_detail()` + test that an unknown error shape still surfaces
+- [x] POST→PUT fallback + test
+- [x] 251 pytest / 39 vitest / 4 e2e green
+
+**Day-N cascade, diagnosed but not fixed here:** the banner applies, the port
+template fails on the interactive prompt, and the uplink and VLAN templates then
+fail with *"Connection to device 172.20.10.145 timed out using protocol ssh2"*.
+The timeouts are collateral — the port push takes the switch's reachability with
+it. `ACCESS_PORTS` currently spans `Te1/0/37`–`1/0/47`, and several of those were
+`connected` in the operator's `show interface status`. Access config on a live
+uplink or trunk is what drops the session. Fixing the port list (or the template)
+should make the last two pass unchanged.
