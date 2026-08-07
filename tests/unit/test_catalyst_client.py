@@ -332,10 +332,15 @@ async def test_deployable_templates_plain_template_sends_all_params() -> None:
     """A plain template deploys as itself with no param filtering."""
     respx.post(TOKEN_URL).respond(200, json={"Token": "tok"})
     respx.get(f"{TEMPLATE_URL}/tpl-1").respond(
-        200, json={"id": "tpl-1", "templateParams": [{"parameterName": "HOSTNAME"}]}
+        200,
+        json={
+            "id": "tpl-1",
+            "name": "Day0 Onboarding",
+            "templateParams": [{"parameterName": "HOSTNAME"}],
+        },
     )
     async with CatalystCenterClient(BASE, "admin", "pw") as client:
-        assert await client.get_deployable_templates("tpl-1") == [("tpl-1", [])]
+        assert await client.get_deployable_templates("tpl-1") == [("tpl-1", "Day0 Onboarding", [])]
 
 
 @respx.mock
@@ -349,18 +354,19 @@ async def test_deployable_templates_composite_expands_to_members() -> None:
             "id": "comp-1",
             "composite": True,
             "containingTemplates": [
-                {"id": "banner", "templateParams": [{"parameterName": "BANNER"}]},
+                {"id": "banner", "name": "Banner", "templateParams": [{"parameterName": "BANNER"}]},
                 {"id": "ports"},
             ],
         },
     )
     respx.get(f"{TEMPLATE_URL}/ports").respond(
-        200, json={"id": "ports", "templateParams": [{"parameterName": "PO_ID"}]}
+        200,
+        json={"id": "ports", "name": "Port Config", "templateParams": [{"parameterName": "PO_ID"}]},
     )
     async with CatalystCenterClient(BASE, "admin", "pw") as client:
         assert await client.get_deployable_templates("comp-1") == [
-            ("banner", ["BANNER"]),
-            ("ports", ["PO_ID"]),
+            ("banner", "Banner", ["BANNER"]),
+            ("ports", "Port Config", ["PO_ID"]),
         ]
 
 

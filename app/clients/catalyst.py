@@ -329,13 +329,17 @@ class CatalystCenterClient:
                     variables.append(name)
         return variables
 
-    async def get_deployable_templates(self, template_id: str) -> list[tuple[str, list[str]]]:
+    async def get_deployable_templates(self, template_id: str) -> list[tuple[str, str, list[str]]]:
         """The template(s) to actually deploy, as ordered `(id, variables)`.
 
         A **composite** template is a container, not something CCC can render on
         its own: deploying it pushes its `containingTemplates` JSON to the device
         as CLI text (`% Invalid input detected`). Its members must be deployed
         individually, in declaration order. A regular template returns itself.
+
+        Each entry is `(id, name, variables)`. The name matters: the caller
+        orders members so a template that can drop the device's own management
+        path runs last (see `order_members`).
 
         Each member comes back with its own variable list so the deploy sends
         only the parameters that member declares. A plain template returns an
@@ -346,16 +350,19 @@ class CatalystCenterClient:
         template = await self.get_template(template_id)
         members = template.get("containingTemplates") or []
         if not members:
-            return [(template_id, [])]
-        deployable: list[tuple[str, list[str]]] = []
+            return [(template_id, str(template.get("name") or template_id), [])]
+        deployable: list[tuple[str, str, list[str]]] = []
         for member in members:
             member_id = member.get("id") or member.get("templateId")
             if not member_id:
                 continue
+            name = member.get("name")
             variables = _template_params(member)
-            if not variables:
-                variables = _template_params(await self.get_template(str(member_id)))
-            deployable.append((str(member_id), variables))
+            if not variables or not name:
+                detail = await self.get_template(str(member_id))
+                variables = variables or _template_params(detail)
+                name = name or detail.get("name")
+            deployable.append((str(member_id), str(name or member_id), variables))
         if not deployable:
             raise CatalystError(
                 f"Composite template {template_id} lists no usable member templates."
