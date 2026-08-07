@@ -1241,3 +1241,28 @@ offending commands directly instead of anyone guessing.
 
 - [x] `PROVISION_HINTS["NCHS20057"]` covers SNMP/syslog/NTP/DNS/DHCP + the tab
 - [x] 244 pytest / 39 vitest / 4 e2e green
+
+## The conflict theory is disproven (v1.20.2) ✅
+
+The template's **Provision Conflicts** tab reports *"No conflicting commands are
+found."* So `NCHS20057` is **not** a brownfield config conflict on this
+controller — two versions of the hint (AAA, then SNMP/syslog) both named a cause
+that is now ruled out, and shipping a confident wrong diagnosis is worse than
+shipping none.
+
+What the evidence actually supports, and nothing more:
+
+| Ruled out | Evidence |
+|---|---|
+| The site / floor mapping | `Assigning Devices to Sites` child returns `isError: false` |
+| Brownfield config conflict | Provision Conflicts tab: no conflicting commands |
+| Anything reaching the switch | the failing child lasts ~6 s — a pre-flight rejection |
+
+The hint now lists what to check (inventory state after PnP, network profile
+attached to the site, site network settings) instead of asserting a cause, and
+says plainly that a successful GUI provision means the controller wants a
+different API call for this device type.
+
+- [x] `PROVISION_HINTS["NCHS20057"]` rewritten; test asserts it does **not**
+      re-assert the disproven cause
+- [x] 244 pytest / 39 vitest / 4 e2e green
