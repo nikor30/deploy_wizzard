@@ -590,22 +590,30 @@ def _points_at_the_task_tree(reason: str) -> bool:
 
 
 PROVISION_HINTS: dict[str, str] = {
-    # Seen on a live 2.3.7 controller: "Assigning Devices to Sites" succeeds,
-    # then "Provisioning assigned Devices" fails with this code.
+    # Seen on a live 2.3.7 controller. The task tree splits the provision in two:
+    # "Assigning Devices to Sites" SUCCEEDS, then "Provisioning assigned
+    # Devices" fails with this code, in about six seconds — too fast to have
+    # attempted any configuration, so it is a pre-flight rejection.
+    #
+    # Ruled out on that controller: the site (assignment succeeded, and a floor
+    # is a valid target), and a brownfield config conflict (the template's
+    # Provision Conflicts tab reports no conflicting commands). Do not name a
+    # cause here that has not been confirmed — an earlier version blamed AAA,
+    # then SNMP/syslog, and both were wrong.
     "NCHS20057": (
-        " — Catalyst Center refuses to provision a device that already carries network-settings "
-        "CLI it did not push itself. Those settings are AAA/TACACS/RADIUS, SNMP, syslog, NTP, DNS "
-        "and DHCP — so `snmp-server community`, `snmp-server trap-source`, `logging host`, "
-        "`logging trap` and `logging source-interface` in a Day-0 onboarding template conflict "
-        "just as much as AAA does. Open the template in Catalyst Center and use its "
-        "**Provision Conflicts** tab: it names the conflicting commands directly. Remove those "
-        "lines from the Day-0 template and let provisioning supply them from the site's network "
-        "settings — that is the config you want on the switch in the first place."
+        " — the device was assigned to its site successfully; only the configuration push was "
+        "rejected, and fast enough that nothing reached the switch. Check, in this order: the "
+        "device's state in Catalyst Center Inventory (it must be Managed with inventory "
+        "collection complete, not still syncing after PnP), whether a Network Profile for "
+        "switching is attached to the site, and whether the site's network settings are complete. "
+        "If provisioning the same device by hand in the Catalyst Center GUI succeeds, the "
+        "controller wants a different API call than sda/provisionDevices for this device type — "
+        "capture that call from the browser's network tab."
     ),
     "NCSO20070": (
-        " — one or more AAA CLIs are already present on the device. Same cause as NCHS20057: the "
-        "device carries network-settings CLI Catalyst Center does not own. See the template's "
-        "Provision Conflicts tab."
+        " — one or more AAA CLIs are already present on the device that Catalyst Center did not "
+        "push. Remove them from the Day-0 template so provisioning owns them; the template's "
+        "Provision Conflicts tab lists the offending commands."
     ),
 }
 
