@@ -404,6 +404,30 @@ class CatalystCenterClient:
             json={"networkdevice": [device_uuid]},
         )
 
+    async def provision_wired_device(
+        self, mgmt_ip: str, site_name_hierarchy: str, *, reprovision: bool = False
+    ) -> dict[str, Any]:
+        """ "Provision Wired Device" — the classic wired provisioning call.
+
+        Unlike `sda/provisionDevices` (which runs a fabric step a non-fabric
+        switch is rejected by) this one takes the device's **management IP** and
+        the **site name hierarchy** — a path string, not a UUID — and is the API
+        behind the GUI's Provision action for a wired device. The `business/sda`
+        path segment is historical; the endpoint predates the fabric-specific
+        one and is what wired provisioning has always used.
+
+        POST provisions, PUT re-provisions an already-provisioned device.
+        """
+        response = await self._request(
+            "PUT" if reprovision else "POST",
+            "/dna/intent/api/v1/business/sda/provision-device",
+            json={
+                "deviceManagementIpAddress": mgmt_ip,
+                "siteNameHierarchy": site_name_hierarchy,
+            },
+        )
+        return dict(response.json())
+
     async def assign_device_to_site(self, site_id: str, device_uuid: str) -> dict[str, Any]:
         """Assign a device to a site — the **non-SDA** path to site settings.
 

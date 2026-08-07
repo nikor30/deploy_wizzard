@@ -437,7 +437,7 @@ class AppFlags(BaseModel):
     access_port_source: str = "netbox"
     # How a claimed device is attached to its site: "assign" (non-SDA — Device
     # Controllability pushes the site's network settings) or "sda" (fabric).
-    provision_method: str = "assign"
+    provision_method: str = "wired"
 
     @field_validator("provision_method")
     @classmethod

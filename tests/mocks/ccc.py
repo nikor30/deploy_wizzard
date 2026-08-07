@@ -165,6 +165,20 @@ def create_ccc_app() -> FastAPI:
             STATE.device_tags.setdefault(str(uuid), []).append(tag_id)
         return {"response": {"taskId": "tag-task"}}
 
+    @app.api_route("/dna/intent/api/v1/business/sda/provision-device", methods=["POST", "PUT"])
+    async def provision_wired(request: Request) -> dict[str, Any]:
+        """Classic wired provisioning: management IP + site name hierarchy."""
+        _check_token(request)
+        body = await request.json()
+        for key in ("deviceManagementIpAddress", "siteNameHierarchy"):
+            if not body.get(key):
+                raise HTTPException(status_code=400, detail=f"provision-device needs '{key}'")
+        STATE.provisioned.append(str(body["deviceManagementIpAddress"]))
+        STATE.task_counter += 1
+        task_id = f"task-{STATE.task_counter}"
+        STATE.tasks[task_id] = {"polls": 0, "fail": STATE.provision_fail}
+        return {"response": {"taskId": task_id}, "version": "1.0"}
+
     @app.post("/dna/intent/api/v1/networkDevices/assignToSite/apply")
     async def assign_to_site(request: Request) -> dict[str, Any]:
         """Non-SDA site attachment: Device Controllability does the rest."""
