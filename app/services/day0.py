@@ -487,8 +487,7 @@ async def _provision_to_site(
         response = await client.assign_device_to_site(site_id, uuid)
     else:
         response = await client.provision_devices(site_id, uuid)
-    inner = response.get("response")
-    task_id = (inner or {}).get("taskId") if isinstance(inner, dict) else None
+    task_id = _provision_task_id(response)
     if not task_id:
         return "Catalyst Center accepted the provision request but returned no taskId."
     await poll_task(
@@ -500,6 +499,25 @@ async def _provision_to_site(
         always_drill=True,
     )
     logger.info("Provisioned to site", extra={"job_id": job_id, "serial": serial})
+    return None
+
+
+def _provision_task_id(payload: dict[str, Any]) -> str | None:
+    """Return a provisioning task id from either Catalyst response shape.
+
+    The GUI-equivalent ``business/sda/provision-device`` API returns
+    ``taskId`` at the top level on Catalyst Center 2.3.7, while the regular
+    Intent APIs (including assign-to-site and ``sda/provisionDevices``) wrap it
+    in ``response``.  Treat only a non-empty scalar as an id so an accepted but
+    untrackable request remains a visible warning rather than a false success.
+    """
+    candidates: list[Any] = [payload.get("taskId")]
+    inner = payload.get("response")
+    if isinstance(inner, dict):
+        candidates.append(inner.get("taskId"))
+    for candidate in candidates:
+        if isinstance(candidate, (str, int)) and str(candidate).strip():
+            return str(candidate).strip()
     return None
 
 

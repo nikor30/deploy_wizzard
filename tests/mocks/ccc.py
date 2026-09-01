@@ -177,7 +177,9 @@ def create_ccc_app() -> FastAPI:
         STATE.task_counter += 1
         task_id = f"task-{STATE.task_counter}"
         STATE.tasks[task_id] = {"polls": 0, "fail": STATE.provision_fail}
-        return {"response": {"taskId": task_id}, "version": "1.0"}
+        # The GUI-equivalent business API is one of the CCC endpoints that
+        # returns the task at the root rather than in the Intent API wrapper.
+        return {"taskId": task_id, "status": "SUCCESS", "version": "1.0"}
 
     @app.post("/dna/intent/api/v1/networkDevices/assignToSite/apply")
     async def assign_to_site(request: Request) -> dict[str, Any]:

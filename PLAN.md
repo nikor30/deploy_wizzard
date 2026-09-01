@@ -1412,3 +1412,29 @@ needed for the ordering, and failures read far better with it than with a UUID.
 - [x] `order_members` / `is_disruptive_template` + tests
 - [x] member names in errors and logs
 - [x] 253 pytest / 39 vitest / 4 e2e green
+
+## Track the GUI provisioning task response (v1.25.1)
+
+**Goal:** make the non-SDA, GUI-equivalent `business/sda/provision-device`
+operation trackable across Catalyst Center 2.3.7 response variants. Unlike most
+Intent endpoints, this business API can return `taskId` at the response root;
+the wizard currently accepts the request and then incorrectly reports that no
+task was returned because it only inspects `response.taskId`.
+
+**Affected files:** `app/services/day0.py`, Day-0 unit tests, release/version
+metadata.
+
+**External endpoint:** `POST`/`PUT
+`/dna/intent/api/v1/business/sda/provision-device`; task polling remains
+`GET /dna/intent/api/v1/task/{taskId}`.
+
+**Test plan:**
+- [x] accept both the business API's top-level `taskId` and the usual nested
+      `response.taskId` shape
+- [x] reject empty or malformed responses without falsely reporting success
+- [ ] run backend lint/type checks and the complete test suite
+
+**Validation note:** Ruff lint/format and all 39 frontend tests pass. The Python
+suite could not start in this environment because its dependencies are not
+installed and the package index is unreachable; the focused unit and integration
+regressions are included for CI/container execution.
