@@ -7,7 +7,7 @@ import pytest
 import respx
 from app.db.models import WebhookDelivery
 from app.db.session import open_session
-from app.services.day0 import run_day0
+from app.services.day0 import _provision_task_id, run_day0
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -20,6 +20,21 @@ def no_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
 CCC = "https://ccc.example.com"
 NETBOX = "https://netbox.example.com"
 HOOK = "https://ise-helper.example.com/hook"
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        ({"taskId": "gui-task-1", "status": "SUCCESS"}, "gui-task-1"),
+        ({"response": {"taskId": "intent-task-1"}}, "intent-task-1"),
+        ({"taskId": "  "}, None),
+        ({"response": "accepted"}, None),
+    ],
+)
+def test_provision_task_id_supports_gui_and_intent_response_shapes(
+    response: dict[str, Any], expected: str | None
+) -> None:
+    assert _provision_task_id(response) == expected
 
 
 def _setup(client: TestClient, *, webhook_enabled: bool = True) -> int:
