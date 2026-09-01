@@ -683,14 +683,32 @@ def is_disruptive_template(name: str) -> bool:
 def order_members(
     members: list[tuple[str, str, list[str]]],
 ) -> list[tuple[str, str, list[str]]]:
-    """Composite members, safe ones first, interface-touching ones last.
+    """Composite members in the least disruptive deployment order.
 
-    Relative order is preserved inside each group, so a composite's own
-    sequencing still holds for everything that does not risk the session.
+    Safe configuration lands first.  Uplink configuration follows because it
+    may establish the device's intended management path.  Access-port / ISE
+    configuration is always last: on a newly onboarded switch it can touch the
+    temporary PnP path and it can also trigger IOS's interactive legacy-AAA to
+    C3PL conversion prompt.  Leaving it until last prevents that one template
+    from turning otherwise valid VLAN and uplink deployments into misleading
+    SSH timeout failures.
+
+    Python's sort is stable, so the composite's relative order is retained
+    inside each risk group.
     """
-    safe = [m for m in members if not is_disruptive_template(m[1])]
-    disruptive = [m for m in members if is_disruptive_template(m[1])]
-    return safe + disruptive
+
+    def risk(member: tuple[str, str, list[str]]) -> int:
+        name = member[1].casefold()
+        # "port channel" is uplink configuration, not an access-port member.
+        if any(word in name for word in ("uplink", "channel", "trunk")):
+            return 1
+        if any(word in name for word in ("port", "dot1x", "ise")):
+            return 2
+        if is_disruptive_template(name):
+            return 1
+        return 0
+
+    return sorted(members, key=risk)
 
 
 def _set_device(device_id: int, state: str, error: str | None = None) -> None:

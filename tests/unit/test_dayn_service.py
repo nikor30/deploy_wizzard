@@ -637,8 +637,8 @@ def test_interface_touching_templates_are_deployed_last() -> None:
     assert [name for _, name, _ in order_members(members)] == [
         "Webasto Login Banner",
         "IT_DayN_Vlan",
-        "IT_DayN_Port_Template",
         "IT-DayN-Uplink_Conf",
+        "IT_DayN_Port_Template",
     ]
 
 
@@ -654,6 +654,25 @@ def test_ordering_keeps_relative_order_inside_each_group() -> None:
     assert [n for _, n, _ in order_members(members)] == [
         "AAA Servers",
         "Banner",
-        "Port Config",
         "Uplink Config",
+        "Port Config",
+    ]
+
+
+def test_access_and_ise_templates_are_always_after_other_interface_templates() -> None:
+    """The access template can prompt during legacy AAA conversion, so even an
+    uplink member that appeared later in the composite must run before it."""
+    from app.services.dayn import order_members
+
+    members = [
+        ("ports", "IT_DayN_Port_Template", []),
+        ("channel", "Port Channel Uplink", []),
+        ("ise", "ISE dot1x policy", []),
+        ("vlan", "IT_DayN_Vlan", []),
+    ]
+    assert [member_id for member_id, _, _ in order_members(members)] == [
+        "vlan",
+        "channel",
+        "ports",
+        "ise",
     ]
