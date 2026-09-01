@@ -1438,3 +1438,20 @@ metadata.
 suite could not start in this environment because its dependencies are not
 installed and the package index is unreachable; the focused unit and integration
 regressions are included for CI/container execution.
+## Put access/ISE configuration after the uplink (v1.25.1) ✅
+
+The live failure confirms the access-port member reaches IOS's interactive
+legacy-AAA conversion prompt; members attempted after it then fail with
+collateral SSH timeouts. Merely grouping every interface template as
+"disruptive" preserved the composite's unsafe port-before-uplink order.
+
+`order_members` now uses three stable risk groups: safe configuration first,
+uplink/interface/channel configuration second, and access-port/dot1x/ISE
+configuration last. This ensures the VLAN and intended uplink land before the
+access member can interrupt the temporary PnP path. The remaining access-member
+failure is correctly identified as a Catalyst template issue requiring the
+prompting command's `#INTERACTIVE` wrapper; the deployment API cannot answer a
+prompt omitted by the template.
+
+- [x] Regression tests cover the live port-before-uplink member order
+- [x] Version and release notes updated
