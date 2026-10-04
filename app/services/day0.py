@@ -17,15 +17,18 @@ from app.clients.catalyst import CatalystCenterClient
 from app.clients.webhook import send_webhook
 from app.db.models import Job, JobDevice, ServiceSettings, TemplateSecret, WebhookDelivery
 from app.db.session import open_session
-from app.errors import ConfigurationError, PnPBridgeError, TaskTimeout
+from app.errors import CatalystTransientError, ConfigurationError, PnPBridgeError, TaskTimeout
 from app.services import settings_store
 from app.services.dayn import (
     SECRET,
     SECRET_MASK,
     hidden_variable,
+    mgmt_facts,
+    normalize_var,
     poll_task,
     provision_hint,
     resolve_path,
+    wait_out_transient,
 )
 from app.services.matching import MATCHED
 
@@ -38,6 +41,10 @@ DEVICE_TIMEOUT_SECONDS = 30 * 60
 # against live fixtures; unknown error-ish states fail loudly via timeout).
 STATE_SUCCESS = "Provisioned"
 STATES_FAILED = ("Error", "Failed")
+# Polls during which the terminal state a device had BEFORE the claim is not
+# taken as the claim's result (CCC may not have updated the PnP record yet).
+# Bounded, so a device that really ends in the same state again is reported.
+STALE_STATE_POLLS = 3
 
 
 # Source labels for a resolved Day-0 variable (also used by the UI).
@@ -100,10 +107,6 @@ DAY0_CHOICE_VARS: dict[str, list[str]] = {
 }
 
 
-def _normalize_var(name: str) -> str:
-    return "".join(c for c in name.upper() if c.isalnum())
-
-
 def day0_builtins(device: JobDevice, gateway: str | None = None) -> dict[str, str]:
     """The standard onboarding values derived from the NetBox match: hostname,
     mgmt IP/mask/prefix/subnet, mgmt VLAN + its name, and the default gateway.
@@ -115,14 +118,13 @@ def day0_builtins(device: JobDevice, gateway: str | None = None) -> dict[str, st
     values: dict[str, str] = {}
     if device.netbox_name:
         values["hostname"] = device.netbox_name
-    if device.mgmt_ip:
-        iface = ipaddress.ip_interface(device.mgmt_ip)
-        values["mgmt_ip"] = str(iface.ip)
-        values["mgmt_mask"] = str(iface.network.netmask)
-        values["mgmt_prefix"] = str(iface.network.prefixlen)
-        values["mgmt_subnet"] = str(iface.network)
-        hosts = iface.network.hosts()
-        first = next(iter(hosts), None)
+    mgmt = mgmt_facts(device.mgmt_ip)  # the same derivation Day-N uses
+    if mgmt is not None:
+        values["mgmt_ip"] = mgmt["ip"]
+        values["mgmt_mask"] = mgmt["netmask"]
+        values["mgmt_prefix"] = str(mgmt["prefix_length"])
+        values["mgmt_subnet"] = mgmt["cidr"]
+        first = next(iter(ipaddress.ip_network(mgmt["cidr"]).hosts()), None)
         if first is not None:
             values["gateway"] = str(first)
     if gateway:
@@ -151,12 +153,12 @@ def resolve_day0_variables(
     variable / secret matched by name (set once, masked) → open for manual
     entry. `gateway` is a guess and stays editable (source `manual`)."""
     builtins = day0_builtins(device, gateway)
-    secrets_by_norm = {_normalize_var(name): name for name in secret_names}
+    secrets_by_norm = {normalize_var(name): name for name in secret_names}
     result: dict[str, dict[str, Any]] = {}
     for variable in variables:
         if hidden_variable(variable):
             continue
-        norm = _normalize_var(variable)
+        norm = normalize_var(variable)
         key = DAY0_ALIASES.get(norm)
         if key and key in builtins:
             source = SRC_MANUAL if key == "gateway" else SRC_NETBOX
@@ -305,35 +307,59 @@ async def _notify_ise(job_id: int, device_id: int) -> None:
             logger.info("Webhook not configured/enabled — skipping", extra={"job_id": job_id})
             return
         url = settings_row.base_url
-        secret = settings_store.decrypt_secret(settings_row)
         tls_verify = settings_row.tls_verify
         auth_header = settings_row.auth_header
-        auth_token = settings_store.decrypt_auth_token(settings_row)
         payload = _webhook_payload(job_id, device)
+        try:
+            secret = settings_store.decrypt_secret(settings_row)
+            auth_token = settings_store.decrypt_auth_token(settings_row)
+        except PnPBridgeError as exc:
+            # e.g. PNPB_SECRET_KEY changed: record the failed delivery so it can
+            # be retried from the Logs page once the secret is re-entered
+            _record_delivery(job_id, payload, ok=False, attempts=0, error=exc.message)
+            logger.error(
+                "ISE webhook not sent - it could not be prepared (claim NOT rolled back): %s",
+                exc.message,
+                extra={"job_id": job_id, "device_serial": payload["device"]["serial"]},
+            )
+            return
 
-    result = await send_webhook(
-        url,
-        payload,
-        secret=secret,
-        tls_verify=tls_verify,
-        auth_header=auth_header,
-        auth_token=auth_token,
-    )
+    try:
+        result = await send_webhook(
+            url,
+            payload,
+            secret=secret,
+            tls_verify=tls_verify,
+            auth_header=auth_header,
+            auth_token=auth_token,
+        )
+    except Exception as exc:  # never lose the event: it stays retryable
+        _record_delivery(
+            job_id, payload, ok=False, attempts=1, error=f"{type(exc).__name__}: {exc}"
+        )
+        logger.exception("ISE webhook delivery crashed (claim NOT rolled back)")
+        return
+    _record_delivery(job_id, payload, ok=result.ok, attempts=result.attempts, error=result.error)
+    if not result.ok:
+        logger.error(
+            "ISE webhook delivery failed (claim NOT rolled back)",
+            extra={"job_id": job_id, "device_serial": payload["device"]["serial"]},
+        )
+
+
+def _record_delivery(
+    job_id: int, payload: dict[str, Any], *, ok: bool, attempts: int, error: str | None
+) -> None:
     with open_session() as db:
         db.add(
             WebhookDelivery(
                 job_id=job_id,
                 device_serial=payload["device"]["serial"],
                 payload=payload,
-                status="delivered" if result.ok else "failed",
-                attempts=result.attempts,
-                last_error=result.error,
+                status="delivered" if ok else "failed",
+                attempts=attempts,
+                last_error=error,
             )
-        )
-    if not result.ok:
-        logger.error(
-            "ISE webhook delivery failed (claim NOT rolled back)",
-            extra={"job_id": job_id, "device_serial": payload["device"]["serial"]},
         )
 
 
@@ -378,10 +404,26 @@ def device_role_name(
     edit there is honoured. Not every Day-0 template declares a role variable
     though, and the role is still known from the NetBox match — so fall back to
     that rather than leaving the CCC inventory role unset."""
-    for key, value in (day0_variables or {}).items():
-        if _normalize_var(key) in ROLE_VARIABLES and str(value).strip():
+    for key, entry in (day0_variables or {}).items():
+        # resolved variables are {"value": ..., "source": ...}; str() of that dict
+        # used to become the role and a junk CCC tag ("_value_Access_source_netbox_")
+        value = entry.get("value") if isinstance(entry, dict) else entry
+        if normalize_var(key) in ROLE_VARIABLES and value is not None and str(value).strip():
             return str(value).strip()
     return netbox_role.strip() if netbox_role and netbox_role.strip() else None
+
+
+def _with_overrides(
+    day0_variables: dict[str, Any] | None, overrides: dict[str, str] | None
+) -> dict[str, Any] | None:
+    """Resolved variables as the operator saw them, with their entries applied
+    (in memory only - the job record keeps the resolved values)."""
+    if not day0_variables or not overrides:
+        return day0_variables
+    return {
+        key: {**info, "value": overrides[key]} if key in overrides else info
+        for key, info in day0_variables.items()
+    }
 
 
 def ccc_role(role_name: str | None) -> str | None:
@@ -395,7 +437,7 @@ def ccc_role(role_name: str | None) -> str | None:
 
 
 async def _apply_inventory_metadata(
-    client: CatalystCenterClient, job_id: int, device_id: int
+    client: CatalystCenterClient, job_id: int, device_id: int, role_name: str | None = None
 ) -> None:
     """Mirror the wizard's role selection into CCC inventory as role + tag.
 
@@ -409,7 +451,8 @@ async def _apply_inventory_metadata(
             return
         serial = device.serial
         ip = device.mgmt_ip.split("/")[0]
-        role_name = device_role_name(device.day0_variables, device.netbox_role)
+        if role_name is None:
+            role_name = device_role_name(device.day0_variables, device.netbox_role)
 
     if not role_name:
         return
@@ -521,6 +564,18 @@ def _provision_task_id(payload: dict[str, Any]) -> str | None:
     return None
 
 
+async def _pnp_state_before_claim(client: CatalystCenterClient, ccc_device_id: str) -> str | None:
+    """PnP state before the claim; None if it cannot be read (best effort - the
+    claim itself must not fail because this lookup did)."""
+    try:
+        info = (await client.get_pnp_device(ccc_device_id)).get("deviceInfo") or {}
+    except Exception as exc:
+        logger.debug("PnP state before claim not readable: %s", exc)
+        return None
+    state = info.get("state")
+    return str(state) if state else None
+
+
 async def _claim_one(
     client: CatalystCenterClient,
     job_id: int,
@@ -530,16 +585,38 @@ async def _claim_one(
     device_timeout: float,
     provision: bool,
     provision_method: str = "wired",
+    role_name: str | None = None,
 ) -> None:
     ccc_device_id = payload["deviceId"]
     _set_device_state(device_id, "claiming")
     try:
+        # A device from an earlier attempt still says Error/Provisioned until CCC
+        # updates its PnP record after the new claim - remember where it started.
+        previous_state = await _pnp_state_before_claim(client, ccc_device_id)
         await client.claim_device(payload)
         _set_device_state(device_id, "provisioning")
         deadline = asyncio.get_event_loop().time() + device_timeout
+        stale_polls = 0
         while True:
-            info = (await client.get_pnp_device(ccc_device_id)).get("deviceInfo") or {}
+            try:
+                info = (await client.get_pnp_device(ccc_device_id)).get("deviceInfo") or {}
+            except CatalystTransientError as exc:
+                await wait_out_transient(
+                    exc, deadline, poll_interval, f"PnP device {ccc_device_id}"
+                )
+                continue
             state = info.get("state")
+            if (
+                state == previous_state
+                and state in (STATE_SUCCESS, *STATES_FAILED)
+                and stale_polls < STALE_STATE_POLLS
+            ):
+                # not yet updated for this claim; a real outcome changes the state
+                # first or shows up again after a few polls
+                stale_polls += 1
+                await asyncio.sleep(poll_interval)
+                continue
+            previous_state = None  # any fresh reading ends the stale window
             if state == STATE_SUCCESS:
                 break
             if state in STATES_FAILED:
@@ -565,7 +642,7 @@ async def _claim_one(
         _set_device_state(device_id, "failed", error=str(exc))
         return
 
-    await _apply_inventory_metadata(client, job_id, device_id)
+    await _apply_inventory_metadata(client, job_id, device_id, role_name)
 
     provision_warning: str | None = None
     if provision:
@@ -616,8 +693,42 @@ async def run_day0(
     image_id: str | None,
     poll_interval: float = POLL_INTERVAL_SECONDS,
     device_timeout: float = DEVICE_TIMEOUT_SECONDS,
+    manual: dict[int, dict[str, str]] | None = None,
 ) -> None:
-    """Claim every matched device of the job concurrently, isolated per device."""
+    """Claim every matched device of the job that has not succeeded yet,
+    concurrently and isolated per device.
+
+    `manual` carries the operator's step-3 entries per device; they go into the
+    claim payload only and are never written to the job record.
+
+    Runs as a background task after the API committed `day0_running`: anything
+    that escapes here (e.g. a secret that no longer decrypts) must still close
+    the job, or it stays `day0_running` forever and every action answers 409.
+    """
+    try:
+        await _run_day0(
+            job_id,
+            config_id=config_id,
+            image_id=image_id,
+            poll_interval=poll_interval,
+            device_timeout=device_timeout,
+            manual=manual or {},
+        )
+    except Exception as exc:
+        logger.exception("Day-0 run aborted", extra={"job_id": job_id})
+        message = exc.message if isinstance(exc, PnPBridgeError) else f"{type(exc).__name__}: {exc}"
+        _finish_job(job_id, error=f"Day-0 run aborted: {message}")
+
+
+async def _run_day0(
+    job_id: int,
+    *,
+    config_id: str,
+    image_id: str | None,
+    poll_interval: float,
+    device_timeout: float,
+    manual: dict[int, dict[str, str]],
+) -> None:
     with open_session() as db:
         job = db.get(Job, job_id)
         if job is None:
@@ -636,13 +747,19 @@ async def run_day0(
             row.name: box.decrypt(row.secret_encrypted)
             for row in db.scalars(select(TemplateSecret)).all()
         }
-        work: list[tuple[int, dict[str, Any]]] = []
+        work: list[tuple[int, dict[str, Any], str | None]] = []
         for device in job.devices:
-            if device.match_status != MATCHED:
+            # never claim a device twice: a provisioned sibling stays as it is
+            if device.match_status != MATCHED or device.state == "success":
                 continue
+            overrides = manual.get(device.id)
             try:
                 payload = build_claim_payload(
-                    device, config_id=config_id, image_id=image_id, secret_values=secret_values
+                    device,
+                    config_id=config_id,
+                    image_id=image_id,
+                    overrides=overrides,
+                    secret_values=secret_values,
                 )
             except PnPBridgeError as exc:
                 device.state = "failed"
@@ -650,7 +767,10 @@ async def run_day0(
                 continue
             device.state = "queued"
             device.error = None
-            work.append((device.id, payload))
+            role_name = device_role_name(
+                _with_overrides(device.day0_variables, overrides), device.netbox_role
+            )
+            work.append((device.id, payload, role_name))
 
     if not _catalyst_configured(catalyst_row, catalyst_secret):
         _finish_job(job_id, error="Catalyst Center is not configured.")
@@ -663,7 +783,7 @@ async def run_day0(
         catalyst_secret,
         tls_verify=catalyst_row.tls_verify,
     ) as client:
-        await asyncio.gather(
+        results = await asyncio.gather(
             *(
                 _claim_one(
                     client,
@@ -674,12 +794,33 @@ async def run_day0(
                     device_timeout,
                     provision,
                     provision_method,
+                    role_name,
                 )
-                for device_id, payload in work
+                for device_id, payload, role_name in work
             ),
             return_exceptions=True,
         )
+    # gather(return_exceptions=True) keeps one device from aborting its siblings,
+    # but an exception that escaped a device task used to vanish without a log
+    # line and leave that device mid-claim.
+    for (device_id, _payload, _role), result in zip(work, results, strict=True):
+        if isinstance(result, BaseException):
+            _report_unexpected(job_id, device_id, result)
     _finish_job(job_id)
+
+
+def _report_unexpected(job_id: int, device_id: int, exc: BaseException) -> None:
+    logger.error(
+        "Unexpected Day-0 error for device",
+        exc_info=exc,
+        extra={"job_id": job_id, "device_id": device_id},
+    )
+    with open_session() as db:
+        device = db.get(JobDevice, device_id)
+        if device is not None and device.state in ("queued", "claiming", "provisioning"):
+            device.state = "failed"
+            device.error = f"Unexpected error: {type(exc).__name__}: {exc}"
+            device.day0_finished_at = datetime.now(tz=UTC)
 
 
 def _catalyst_configured(row: ServiceSettings | None, secret: str | None) -> bool:

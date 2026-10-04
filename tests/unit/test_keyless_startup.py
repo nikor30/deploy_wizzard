@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from app.config import get_settings
 from app.db.session import reset_engine
+from app.logging_setup import flush_db_sink
 from app.main import create_app
 from fastapi.testclient import TestClient
 
@@ -43,6 +44,18 @@ def test_generated_key_persists_across_restarts(keyless_env: Path) -> None:
         body = client.get("/api/settings/credentials").json()
     assert body["netbox"]["secret_masked"] == "****1234"
     assert (keyless_env / "secret.key").read_text() == first_key
+
+
+def test_startup_warning_reaches_logs_page(
+    keyless_env: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Regression: the generated-key warning is logged before the migrations ran;
+    # the DB sink wrote it against a missing `log_entries` table and lost it.
+    with TestClient(create_app()) as client:
+        flush_db_sink()
+        logs = client.get("/api/logs", params={"component": "app.config"}).json()
+    assert any("generated a new secret key" in e["message"] for e in logs["entries"])
+    assert "DB log sink write failed" not in capsys.readouterr().err
 
 
 def test_env_var_takes_precedence_over_key_file(

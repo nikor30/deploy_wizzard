@@ -2,11 +2,12 @@
 
 import logging
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from app.clients.webhook import send_webhook
@@ -152,19 +153,54 @@ async def retry_webhook_delivery(delivery_id: int, db: DbSession) -> WebhookDeli
     row = db.get(WebhookDelivery, delivery_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"Delivery {delivery_id} not found.")
+    if row.status != "failed":
+        # a delivered event must not reach ISE twice; "retrying" is in flight
+        raise HTTPException(
+            status_code=409,
+            detail=f"Delivery {delivery_id} is {row.status} - only a failed delivery is retried.",
+        )
     settings_row = settings_store.get_service_settings(db, "webhook")
     if settings_row is None or not settings_row.base_url:
         raise HTTPException(status_code=400, detail="Webhook is not configured in Settings.")
+    if not settings_row.enabled:
+        raise HTTPException(
+            status_code=409,
+            detail="The ISE webhook is disabled in Settings - enable it to retry deliveries.",
+        )
     secret = settings_store.decrypt_secret(settings_row)
+    auth_token = settings_store.decrypt_auth_token(settings_row)
 
-    result = await send_webhook(
-        settings_row.base_url,
-        row.payload,
-        secret=secret,
-        tls_verify=settings_row.tls_verify,
-        auth_header=settings_row.auth_header,
-        auth_token=settings_store.decrypt_auth_token(settings_row),
+    # Claim the delivery atomically before the (slow, retried) send: a double
+    # click or a second browser must not send the same event twice.
+    claimed = cast(
+        CursorResult[Any],
+        db.execute(
+            update(WebhookDelivery)
+            .where(WebhookDelivery.id == delivery_id, WebhookDelivery.status == "failed")
+            .values(status="retrying")
+        ),
     )
+    if claimed.rowcount != 1:
+        raise HTTPException(
+            status_code=409, detail=f"Delivery {delivery_id} is already being retried."
+        )
+    db.commit()  # make "retrying" visible to concurrent requests before sending
+    db.refresh(row)
+
+    try:
+        result = await send_webhook(
+            settings_row.base_url,
+            row.payload,
+            secret=secret,
+            tls_verify=settings_row.tls_verify,
+            auth_header=settings_row.auth_header,
+            auth_token=auth_token,
+        )
+    except Exception as exc:
+        row.status = "failed"
+        row.last_error = f"{type(exc).__name__}: {exc}"
+        db.commit()
+        raise
     row.attempts += result.attempts
     row.status = "delivered" if result.ok else "failed"
     row.last_error = result.error

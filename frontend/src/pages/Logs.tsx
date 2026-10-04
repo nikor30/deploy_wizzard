@@ -80,7 +80,13 @@ export default function Logs() {
     load()
   }, [load])
 
+  // deliveries whose retry is in flight: each click would otherwise send the
+  // event to ISE again (the server also refuses a second concurrent retry)
+  const [retrying, setRetrying] = useState<number[]>([])
+
   const retry = async (delivery: WebhookDelivery) => {
+    if (retrying.includes(delivery.id)) return
+    setRetrying((prev) => [...prev, delivery.id])
     try {
       const updated = await fetchJson<WebhookDelivery>(
         `/api/logs/webhook-deliveries/${delivery.id}/retry`,
@@ -89,6 +95,8 @@ export default function Logs() {
       setDeliveries((prev) => prev.map((d) => (d.id === updated.id ? updated : d)))
     } catch (err) {
       setError((err as Error).message)
+    } finally {
+      setRetrying((prev) => prev.filter((id) => id !== delivery.id))
     }
   }
 
@@ -116,10 +124,11 @@ export default function Logs() {
                 </span>
                 <button
                   type="button"
-                  className="rounded-md border border-amber-400 px-3 py-1 text-sm font-medium hover:bg-amber-100 dark:hover:bg-amber-900/40"
+                  className="rounded-md border border-amber-400 px-3 py-1 text-sm font-medium hover:bg-amber-100 disabled:opacity-50 dark:hover:bg-amber-900/40"
+                  disabled={retrying.includes(delivery.id)}
                   onClick={() => void retry(delivery)}
                 >
-                  Retry webhook
+                  {retrying.includes(delivery.id) ? 'Retrying…' : 'Retry webhook'}
                 </button>
               </li>
             ))}

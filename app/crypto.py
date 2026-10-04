@@ -3,6 +3,7 @@
 from cryptography.fernet import Fernet, InvalidToken
 
 from app.errors import ConfigurationError
+from app.logging_setup import register_secret
 
 MASK_SUFFIX_LEN = 4
 
@@ -18,17 +19,23 @@ class SecretBox:
                 "print(Fernet.generate_key().decode())'"
             ) from exc
 
+    # Every plaintext passing through here is registered with the log redaction,
+    # so it is masked by VALUE wherever it later shows up (trace bodies, CCC error
+    # texts, messages) - not only under secret-looking key names.
     def encrypt(self, plaintext: str) -> str:
+        register_secret(plaintext)
         return self._fernet.encrypt(plaintext.encode()).decode()
 
     def decrypt(self, ciphertext: str) -> str:
         try:
-            return self._fernet.decrypt(ciphertext.encode()).decode()
+            plaintext = self._fernet.decrypt(ciphertext.encode()).decode()
         except InvalidToken as exc:
             raise ConfigurationError(
                 "Stored secret cannot be decrypted with the current PNPB_SECRET_KEY. "
                 "The key changed since the secret was saved; re-enter the credential."
             ) from exc
+        register_secret(plaintext)
+        return plaintext
 
 
 def mask_secret(plaintext: str | None) -> str | None:

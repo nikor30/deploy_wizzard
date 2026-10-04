@@ -46,6 +46,31 @@ describe('SettingsDayN', () => {
   })
 })
 
+describe('SettingsDayN after a failed load', () => {
+  it('cannot build a new table that would replace the stored mappings', async () => {
+    // Regression: "Suggest" and "Add mapping" turned the unloaded list into a new
+    // one, and "Save" then replaced every stored mapping with it.
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/settings/dayn')
+        return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({}) })
+      if (url === '/api/wizard/day0/templates')
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([{ id: 'tpl-dayn', name: 'DayN', project: 'P' }]),
+        })
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) })
+    })
+    render(<SettingsDayN />)
+    await userEvent.selectOptions(
+      await screen.findByLabelText('Template for suggestions'),
+      'tpl-dayn',
+    )
+    expect(screen.getByRole('button', { name: 'Suggest mappings' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add mapping' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Save mappings' })).toBeDisabled()
+  })
+})
+
 describe('SettingsDayN suggestions', () => {
   it('suggests paths for a template and keeps unmatched variables manual', async () => {
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {

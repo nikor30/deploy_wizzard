@@ -126,6 +126,7 @@ def _make_dayn_ready_device(client: TestClient) -> tuple[int, int]:
             "RADIUS_KEY": {"value": "****", "source": "secret", "secret": "radius_key"},
             "HOSTNAME": {"value": "sw-1", "source": "mapped"},
         }
+        device.job.dayn_template_id = "tpl-1"  # recorded by 'Resolve variables'
     return job_id, device_id
 
 

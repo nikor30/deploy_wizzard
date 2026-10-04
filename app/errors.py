@@ -21,6 +21,14 @@ class CatalystAuthError(CatalystError):
     """Authentication against Catalyst Center failed."""
 
 
+class CatalystTransientError(CatalystError):
+    """Catalyst Center is temporarily unavailable (unreachable, HTTP 429 or 5xx).
+
+    A long-running poll keeps going on this instead of failing the device:
+    CCC is still working on the claim/deploy while it is briefly unreachable
+    or rate limiting."""
+
+
 class NetBoxError(PnPBridgeError):
     """NetBox returned an unexpected error."""
 

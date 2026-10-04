@@ -41,6 +41,50 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock)
 })
 
+describe('SettingsCredentials options', () => {
+  function failed(status: number, detail: string): Response {
+    return { ok: false, status, json: () => Promise.resolve({ detail }) } as Response
+  }
+
+  function flagPuts() {
+    return fetchMock.mock.calls.filter(
+      ([url, init]) => url === '/api/settings/flags' && (init as RequestInit)?.method === 'PUT',
+    )
+  }
+
+  it('never overwrites the stored options when they could not be loaded', async () => {
+    // Regression: after a failed GET the defaults stayed in place, and the next toggle
+    // PUT all of them (provisioning, template filters, PnP states) over the stored values.
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/settings/flags' && !init?.method)
+        return Promise.resolve(failed(500, 'database is locked'))
+      return Promise.resolve(jsonResponse(storedCredentials))
+    })
+    render(<SettingsCredentials />)
+    const debug = await screen.findByLabelText('Show variable sources (debug)')
+    expect(await screen.findByText(/could not be loaded/)).toBeInTheDocument()
+    await userEvent.click(debug)
+    expect(flagPuts()).toHaveLength(0)
+    expect(debug).not.toBeChecked()
+  })
+
+  it('reverts an option and says why when the server rejects it', async () => {
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/settings/flags' && init?.method === 'PUT')
+        return Promise.resolve(failed(422, 'unknown provision_method'))
+      if (url === '/api/settings/flags')
+        return Promise.resolve(jsonResponse({ debug: false, pnp_states: ['Unclaimed'] }))
+      return Promise.resolve(jsonResponse(storedCredentials))
+    })
+    render(<SettingsCredentials />)
+    const debug = await screen.findByLabelText('Show variable sources (debug)')
+    await userEvent.click(debug)
+    expect(await screen.findByText(/unknown provision_method/)).toBeInTheDocument()
+    expect(flagPuts()).toHaveLength(1)
+    expect(debug).not.toBeChecked()
+  })
+})
+
 describe('SettingsCredentials', () => {
   it('shows stored values with masked secrets as placeholders', async () => {
     render(<SettingsCredentials />)

@@ -9,8 +9,27 @@ import httpx
 DEFAULT_TIMEOUT = 30.0
 GET_RETRIES = 3
 BACKOFF_BASE_SECONDS = 0.5
+# Upper bound for a server-requested Retry-After wait (HTTP 429).
+RETRY_AFTER_MAX_SECONDS = 30.0
+# Rate limited or temporarily failing: worth retrying an idempotent GET.
+RETRYABLE_STATUS = 429
 
 logger = logging.getLogger(__name__)
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    """Seconds from a numeric Retry-After header, capped; None if absent/unparsable."""
+    value = response.headers.get("Retry-After")
+    if value is None:
+        return None
+    try:
+        return max(0.0, min(float(value), RETRY_AFTER_MAX_SECONDS))
+    except ValueError:  # HTTP-date form: fall back to the normal backoff
+        return None
+
+
+def is_retryable_status(status_code: int) -> bool:
+    return status_code == RETRYABLE_STATUS or status_code >= 500
 
 
 async def get_with_retries(
@@ -21,16 +40,20 @@ async def get_with_retries(
     params: dict[str, Any] | None = None,
 ) -> httpx.Response:
     """GET with up to GET_RETRIES retries (exponential backoff) on transport
-    errors and 5xx responses.
+    errors, 5xx and 429 responses (429 honours Retry-After, capped).
 
-    Non-5xx responses (including 4xx) are returned immediately — they are
-    deterministic and the caller maps them to typed errors.
+    Other 4xx responses are returned immediately — they are deterministic and
+    the caller maps them to typed errors.
     """
     last_error: Exception | None = None
     last_response: httpx.Response | None = None
+    wait: float | None = None
     for attempt in range(GET_RETRIES + 1):
         if attempt:
-            await asyncio.sleep(BACKOFF_BASE_SECONDS * 2 ** (attempt - 1))
+            await asyncio.sleep(
+                wait if wait is not None else BACKOFF_BASE_SECONDS * 2 ** (attempt - 1)
+            )
+            wait = None
         try:
             response = await client.get(url, headers=headers, params=params)
         except httpx.TransportError as exc:
@@ -39,8 +62,10 @@ async def get_with_retries(
                 "GET %s failed (attempt %d/%d): %s", url, attempt + 1, GET_RETRIES + 1, exc
             )
             continue
-        if response.status_code >= 500:
+        if is_retryable_status(response.status_code):
             last_response = response
+            if response.status_code == RETRYABLE_STATUS:
+                wait = _retry_after(response)
             logger.warning(
                 "GET %s returned %d (attempt %d/%d)",
                 url,

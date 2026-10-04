@@ -8,10 +8,9 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1, // the wizard flows share one app DB + one mock state
-  // Those shared-state flows occasionally flake on slower CI runners (a
-  // background task from the previous test still settling when the next one
-  // reseeds the mocks). Retry there; locally a failure should stay a failure.
-  retries: process.env.CI ? 2 : 0,
+  // No retries, also in CI (platform rule): a flaky flow is a bug to fix, and a
+  // retry would hide it. The shared-state flows run serially (workers: 1).
+  retries: 0,
   reporter: [["list"]],
   use: {
     baseURL: "http://127.0.0.1:8061",

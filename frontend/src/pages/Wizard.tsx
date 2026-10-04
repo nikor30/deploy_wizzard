@@ -21,7 +21,7 @@ interface JobDevice {
   serial: string
   pid: string | null
   ccc_device_id: string
-  match_status: 'matched' | 'unmatched' | 'unmapped_site' | null
+  match_status: 'matched' | 'unmatched' | 'unmapped_site' | 'ambiguous' | null
   netbox_name: string | null
   netbox_site_name: string | null
   ccc_site_name: string | null
@@ -353,6 +353,9 @@ function SelectView({ onJobCreated }: { onJobCreated: (job: Job) => void }) {
   )
 }
 
+const AMBIGUOUS_HINT =
+  'Several planned NetBox devices carry this serial — excluded from claiming. Make it unique in NetBox (see the Logs page for the devices), then re-run matching.'
+
 function matchBadge(status: JobDevice['match_status']) {
   if (status === 'matched')
     return (
@@ -370,6 +373,12 @@ function matchBadge(status: JobDevice['match_status']) {
     return (
       <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
         site not mapped
+      </span>
+    )
+  if (status === 'ambiguous')
+    return (
+      <span className="rounded bg-rose-100 px-1.5 py-0.5 text-xs text-rose-800 dark:bg-rose-900/40 dark:text-rose-300">
+        duplicate serial in NetBox
       </span>
     )
   return <span className="text-xs text-slate-400">pending…</span>
@@ -458,6 +467,8 @@ function MatchView({
                   <p className="mt-1 text-slate-400">
                     No planned device with this serial — excluded from claiming.
                   </p>
+                ) : device.match_status === 'ambiguous' ? (
+                  <p className="mt-1 text-rose-700 dark:text-rose-300">{AMBIGUOUS_HINT}</p>
                 ) : (
                   <>
                     <p className="mt-1">Name: {device.netbox_name ?? '—'}</p>
@@ -551,33 +562,46 @@ function useJobWatch(
   setRunning: (running: boolean) => void,
 ) {
   // Live progress: SSE when the browser supports it, 2 s polling otherwise.
+  // A dropped SSE connection (proxy timeout, Wi-Fi change) must not end the
+  // watch: the job is still running server-side, and treating it as finished
+  // re-opened the claim form while devices were being claimed. Fall back to
+  // polling until the server reports a terminal status.
   useEffect(() => {
     if (!running) return
+    let interval: ReturnType<typeof setInterval> | undefined
+    const poll = () => {
+      if (interval !== undefined) return
+      interval = setInterval(() => {
+        fetchJson<Job>(`/api/wizard/jobs/${jobId}`)
+          .then((snapshot) => {
+            setJob(snapshot)
+            if (isTerminal(snapshot.status)) setRunning(false)
+          })
+          .catch(() => undefined)
+      }, 2000)
+    }
+    let source: EventSource | undefined
     if (typeof EventSource !== 'undefined') {
-      const source = new EventSource(`/api/wizard/jobs/${jobId}/events`)
+      source = new EventSource(`/api/wizard/jobs/${jobId}/events`)
       source.onmessage = (event) => {
         const snapshot = JSON.parse(event.data as string) as Job
         setJob(snapshot)
         if (isTerminal(snapshot.status)) {
           setRunning(false)
-          source.close()
+          source?.close()
         }
       }
       source.onerror = () => {
-        source.close()
-        setRunning(false)
+        source?.close()
+        poll()
       }
-      return () => source.close()
+    } else {
+      poll()
     }
-    const interval = setInterval(() => {
-      fetchJson<Job>(`/api/wizard/jobs/${jobId}`)
-        .then((snapshot) => {
-          setJob(snapshot)
-          if (isTerminal(snapshot.status)) setRunning(false)
-        })
-        .catch(() => undefined)
-    }, 2000)
-    return () => clearInterval(interval)
+    return () => {
+      source?.close()
+      if (interval !== undefined) clearInterval(interval)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running, jobId])
 }
@@ -599,6 +623,7 @@ function Day0View({
   const [running, setRunning] = useState(initialJob.status === 'day0_running')
   const [preparing, setPreparing] = useState(false)
   const [prepared, setPrepared] = useState(false)
+  const [claiming, setClaiming] = useState(false)
   const [manual, setManual] = useState<Record<number, Record<string, string>>>({})
   const [debug, setDebug] = useState(false)
 
@@ -648,6 +673,10 @@ function Day0View({
     setManual((prev) => ({ ...prev, [deviceId]: { ...(prev[deviceId] ?? {}), [variable]: value } }))
 
   const start = async () => {
+    // a claim changes real devices: one click, one request (the server also
+    // refuses a second concurrent start)
+    if (claiming) return
+    setClaiming(true)
     setError(null)
     try {
       const started = await fetchJson<Job>(`/api/wizard/jobs/${job.id}/claim`, {
@@ -659,6 +688,8 @@ function Day0View({
       setRunning(true)
     } catch (err) {
       setError((err as Error).message)
+    } finally {
+      setClaiming(false)
     }
   }
 
@@ -682,6 +713,7 @@ function Day0View({
               <select
                 className="mt-1 block w-72 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
                 value={configId}
+                disabled={preparing}
                 onChange={(e) => void prepare(e.target.value)}
               >
                 <option value="">— select template —</option>
@@ -787,7 +819,7 @@ function Day0View({
             <button
               type="button"
               className={buttonPrimary}
-              disabled={!configId || preparing || !prepared}
+              disabled={!configId || preparing || !prepared || claiming}
               onClick={() => void start()}
             >
               Start Day-0 claim ({claimable.length} device(s))
@@ -913,9 +945,22 @@ function DayNView({
       [deviceId]: { ...(prev[deviceId] ?? {}), [variable]: value },
     }))
 
+  // each stage has its own resolved variables - stage 2 must never show or
+  // validate the stage-1 set (the backend checks dayn2_variables)
+  const variablesOf = (device: JobDevice): DayNVariables =>
+    (stage === 1 ? device.dayn_variables : device.dayn2_variables) ?? {}
+  // stage 1 ran with activation deferred: every device waits for the ports stage
+  const stage1Complete = stage === 1 && job.status === 'dayn_stage1_complete'
+  const stage1Finished = stage === 1 && job.status.startsWith('dayn_stage1_')
+  const readyForPorts = job.devices.filter((d) => d.state === 'dayn_complete').length
+  const stage1Failed = job.devices.filter((d) => d.state === 'dayn_failed').length
+  const stage1Message = stage1Complete
+    ? `Base configuration deployed: ${readyForPorts} device(s) ready for ports & uplinks.`
+    : `Base configuration deployed: ${readyForPorts} device(s) ready for ports & uplinks, ${stage1Failed} failed - deploy them again below.`
+
   // optional fields (private-VLAN config) may stay blank and never gate deploy
   const manualComplete = eligible.every((device) =>
-    Object.entries(device.dayn_variables ?? {}).every(
+    Object.entries(variablesOf(device)).every(
       ([variable, info]) =>
         info.source !== 'manual' ||
         info.optional ||
@@ -967,7 +1012,15 @@ function DayNView({
   return (
     <div className="mt-8">
       <ErrorBanner message={error} />
-      {!running && (
+      {!running && stage1Finished && (
+        <p
+          role="status"
+          className="rounded-md bg-emerald-100 px-4 py-3 text-sm font-medium text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+        >
+          {stage1Message}
+        </p>
+      )}
+      {!running && !stage1Complete && (
         <section
           aria-label="Day-N configuration"
           className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
@@ -988,7 +1041,14 @@ function DayNView({
               <select
                 className="mt-1 block w-72 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
                 value={templateId}
-                onChange={(e) => setTemplateId(e.target.value)}
+                disabled={busy}
+                onChange={(e) => {
+                  // variables were resolved for the previous template: deploying the
+                  // new one with them would push foreign values - resolve again
+                  setTemplateId(e.target.value)
+                  setPrepared(false)
+                  setManual({})
+                }}
               >
                 <option value="">— select template —</option>
                 {(templates ?? []).map((template) => (
@@ -1011,7 +1071,7 @@ function DayNView({
         </section>
       )}
 
-      {prepared && (
+      {prepared && !stage1Complete && (
         <div className="mt-4 flex flex-col gap-3">
           {eligible.map((device) => (
             <section
@@ -1027,7 +1087,7 @@ function DayNView({
                 <p className="mt-2 text-sm text-rose-700 dark:text-rose-300">{device.error}</p>
               )}
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                {Object.entries(device.dayn_variables ?? {}).map(([variable, info]) =>
+                {Object.entries(variablesOf(device)).map(([variable, info]) =>
                   info.source === 'manual' ? (
                     <label key={variable} className="block">
                       <span
@@ -1068,27 +1128,27 @@ function DayNView({
       )}
 
       <div className="mt-6 flex items-center gap-3">
-        {!running && prepared && (
+        {!running && prepared && !stage1Complete && (
           <button
             type="button"
             className={buttonPrimary}
-            disabled={!manualComplete || busy}
+            disabled={!templateId || !manualComplete || busy}
             onClick={() => void deploy()}
           >
             {stage === 1 ? 'Deploy Day-N' : 'Deploy ports & uplinks'} ({eligible.length} device(s))
           </button>
         )}
-        {!running && prepared && stage === 1 && (
+        {!running && prepared && stage === 1 && !stage1Complete && (
           <button
             type="button"
             className={buttonSecondary}
-            disabled={!manualComplete || busy}
+            disabled={!templateId || !manualComplete || busy}
             onClick={() => void deploy(true)}
           >
             Deploy, then configure ports
           </button>
         )}
-        {!running && prepared && !manualComplete && (
+        {!running && prepared && !stage1Complete && !manualComplete && (
           <span className="text-sm text-amber-600 dark:text-amber-400">
             Fill in all manual variables first.
           </span>

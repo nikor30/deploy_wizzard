@@ -124,16 +124,40 @@ class TestRequest(ServiceSettingsIn):
     """Test with the submitted values; a missing secret falls back to the stored one."""
 
 
+def _stored_secrets_allowed(base_url: str, stored_url: str | None) -> bool:
+    """Stored credentials may only go to the stored URL.
+
+    The app has no login (SECURITY.md); if a caller could pick the URL and
+    have the STORED password/token sent there, one request would hand over
+    every credential - breaking the write-only guarantee.
+    """
+    return bool(stored_url) and base_url.rstrip("/") == (stored_url or "").rstrip("/")
+
+
 def _resolve_test_input(
     db: Session, service: str, payload: TestRequest
 ) -> tuple[str, str | None, str | None, bool]:
     stored = settings_store.get_service_settings(db, service)
-    base_url = payload.base_url or (stored.base_url if stored else None)
+    stored_url = stored.base_url if stored else None
+    base_url = payload.base_url or stored_url
     username = payload.username or (stored.username if stored else None)
-    secret = payload.secret if payload.secret else settings_store.decrypt_secret(stored)
     tls_verify = payload.tls_verify
     if not base_url:
         raise HTTPException(status_code=422, detail=f"No base URL configured for {service}.")
+    if payload.secret:
+        secret: str | None = payload.secret
+    elif _stored_secrets_allowed(base_url, stored_url):
+        secret = settings_store.decrypt_secret(stored)
+    elif stored is not None and stored.secret_encrypted:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"The URL differs from the saved {service} URL - enter the password/token "
+                "again to test it (saved credentials are only used for the saved URL)."
+            ),
+        )
+    else:
+        secret = None
     return base_url, username, secret, tls_verify
 
 
@@ -162,7 +186,21 @@ async def test_webhook(payload: TestRequest, db: DbSession) -> TestResult:
     """
     base_url, _, secret, tls_verify = _resolve_test_input(db, "webhook", payload)
     stored = settings_store.get_service_settings(db, "webhook")
-    auth_token = payload.auth_token or settings_store.decrypt_auth_token(stored)
+    stored_url = stored.base_url if stored else None
+    if payload.auth_token:
+        auth_token: str | None = payload.auth_token
+    elif _stored_secrets_allowed(base_url, stored_url):
+        auth_token = settings_store.decrypt_auth_token(stored)
+    elif stored is not None and stored.auth_token_encrypted:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "The URL differs from the saved webhook URL - enter the auth token again "
+                "to test it (saved credentials are only used for the saved URL)."
+            ),
+        )
+    else:
+        auth_token = None
     auth_header = payload.auth_header or (stored.auth_header if stored else None)
     probe = {
         "event": "test",

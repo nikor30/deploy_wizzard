@@ -149,6 +149,9 @@ export default function SettingsDayN() {
   }
 
   const suggest = async () => {
+    // Saving replaces the whole table: suggestions must be merged into the
+    // stored rows, never into an empty list after a failed load.
+    if (rows === null) return
     setSuggesting(true)
     setBanner(null)
     try {
@@ -315,7 +318,7 @@ export default function SettingsDayN() {
           <button
             type="button"
             className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
-            disabled={!templateId || suggesting}
+            disabled={!templateId || suggesting || rows === null}
             onClick={() => void suggest()}
           >
             {suggesting ? 'Matching…' : 'Suggest mappings'}
@@ -433,7 +436,8 @@ export default function SettingsDayN() {
       <div className="mt-4 flex items-center gap-3">
         <button
           type="button"
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
+          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
+          disabled={rows === null}
           onClick={() => setRows((prev) => [...(prev ?? []), { variable: '', source_path: '' }])}
         >
           Add mapping

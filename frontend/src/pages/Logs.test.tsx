@@ -92,4 +92,34 @@ describe('Logs', () => {
       ),
     ).toBe(true)
   })
+
+  it('sends a webhook retry only once while it is running', async () => {
+    // Regression: no busy state - every extra click sent the event to ISE again.
+    const delivered = {
+      ok: true,
+      json: () => Promise.resolve({ ...deliveries[0], status: 'delivered', attempts: 5 }),
+    }
+    let release: () => void = () => undefined
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes('/retry') && init?.method === 'POST')
+        return new Promise((resolve) => {
+          release = () => resolve(delivered)
+        })
+      if (url.startsWith('/api/logs/webhook-deliveries'))
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(deliveries) })
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(logPage) })
+    })
+    render(<Logs />)
+    const button = await screen.findByRole('button', { name: 'Retry webhook' })
+    await userEvent.click(button)
+    const busy = await screen.findByRole('button', { name: 'Retrying…' })
+    expect(busy).toBeDisabled()
+    await userEvent.click(busy)
+    const retryCalls = fetchMock.mock.calls.filter(([url]) => (url as string).includes('/retry'))
+    expect(retryCalls).toHaveLength(1)
+    release()
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /Retr/ })).not.toBeInTheDocument(),
+    )
+  })
 })

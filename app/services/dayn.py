@@ -12,14 +12,13 @@ import logging
 import re
 from collections.abc import Iterable
 from datetime import UTC, datetime
-from itertools import pairwise
 from typing import Any
 
 from app.clients.catalyst import CatalystCenterClient
 from app.clients.netbox import NetBoxClient
 from app.db.models import Job, JobDevice, ServiceSettings
 from app.db.session import open_session
-from app.errors import PnPBridgeError, TaskTimeout
+from app.errors import CatalystTransientError, PnPBridgeError, TaskTimeout
 from app.services import settings_store
 
 logger = logging.getLogger(__name__)
@@ -141,6 +140,13 @@ DAYN_ALIASES: dict[str, str] = {
     "NATIVEVLANID": "device.access_vlan",
 }
 
+# Aliases whose wire form differs from the value shown (`claim_value`, as on
+# Day-0): templates use MGMT_SUBNET as the interface mask in `ip address`, and
+# IOS rejects CIDR there (PnP error 1413). Shown as CIDR, sent as the mask.
+DAYN_WIRE_VALUES: dict[str, str] = {
+    "MGMTSUBNET": "device.mgmt.netmask",
+}
+
 # Values the tool can only *suggest* (several NetBox candidates matched). They
 # render as editable manual fields prefilled with the suggestion — the operator
 # confirms — rather than as a read-only value that might be the wrong VLAN.
@@ -186,6 +192,11 @@ def is_internal_var(name: str) -> bool:
     return name.startswith("__")
 
 
+# CamelCase word segments: an acronym before a capitalised word ("VLAN" in
+# "VLANId"), a (capitalised) lowercase word, a trailing acronym, or digits.
+_CAMEL_SEGMENT = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+")
+
+
 def looks_like_junk_var(name: str) -> bool:
     """Detect the garbled variable names Catalyst Center generates from password
     values (e.g. ``pPYzdaRZdKO5gppL7ddKhk3iF``, ``OaMGKyQBNwDjxFcagpT``). These
@@ -193,9 +204,13 @@ def looks_like_junk_var(name: str) -> bool:
     to the operator or sent in a claim/deploy. Operates on the ORIGINAL
     mixed-case name (the case pattern is the tell), never the normalized form.
 
-    A name is junk when it is a single opaque token: no separators, long, mixed
-    upper/lower case, and either contains digits or flips case many times — the
-    fingerprint of a random secret, not a human-authored variable name."""
+    A name is junk when it is a single opaque token (no separators, long, mixed
+    upper/lower case) that does not read as CamelCase words: split into word
+    segments, a random secret falls apart into 1-2 letter fragments
+    (``p|P|zda|R|Zd|KO|…``), while a human-authored name keeps real words
+    (``Default|Gateway|Ip``, ``Radius|Server|Key``). A digit or many case flips
+    alone are NOT enough - that swallowed ``DefaultGatewayIp`` and
+    ``RadiusServerKey1``, which then silently vanished from the claim/deploy."""
     if any(sep in name for sep in "_-. /:"):
         return False
     if len(name) < 16:
@@ -204,10 +219,9 @@ def looks_like_junk_var(name: str) -> bool:
     has_lower = any(c.islower() for c in name)
     if not (has_upper and has_lower):
         return False
-    has_digit = any(c.isdigit() for c in name)
-    letters = [c for c in name if c.isalpha()]
-    case_transitions = sum(1 for a, b in pairwise(letters) if a.isupper() != b.isupper())
-    return has_digit or case_transitions >= 5
+    words = [w for w in _CAMEL_SEGMENT.findall(name) if not w.isdigit()]
+    fragments = sum(1 for w in words if len(w) <= 2)
+    return len(words) >= 4 and fragments * 10 >= len(words) * 6
 
 
 def hidden_variable(name: str) -> bool:
@@ -331,7 +345,12 @@ def resolve_variables(
             alias = DAYN_ALIASES.get(norm)
             value = resolve_path(context, alias) if alias else None
             if value is not None:
-                result[variable] = {"value": value, "source": NETBOX}
+                info: dict[str, Any] = {"value": value, "source": NETBOX}
+                wire = DAYN_WIRE_VALUES.get(norm)
+                wire_value = resolve_path(context, wire) if wire else None
+                if wire_value is not None:
+                    info["claim_value"] = wire_value
+                result[variable] = info
                 continue
             # ambiguous match -> prefilled but editable, operator confirms
             suggestion = DAYN_SUGGESTIONS.get(norm)
@@ -351,6 +370,7 @@ def build_device_context(
     interfaces: list[dict[str, Any]] | None = None,
     site_vlans: list[dict[str, Any]] | None = None,
     contacts: list[dict[str, Any]] | None = None,
+    mgmt_address: str | None = None,
 ) -> dict[str, Any]:
     """Variable-resolution context: the NetBox device enriched with uplink/
     port details, computed management-network facts, and the flat Catalyst
@@ -422,22 +442,31 @@ def build_device_context(
     ctx["critical_vlan_suggested"] = _vlan_suggestion(site_vlans, "critical")
     ctx["support_contact"] = _resolve_contact(device, contacts)
 
-    address = (device.get("primary_ip4") or {}).get("address")
-    if address:
-        try:
-            interface = ipaddress.ip_interface(str(address))
-        except ValueError:
-            pass
-        else:
-            ctx["mgmt"] = {
-                "address": str(address),
-                "ip": str(interface.ip),
-                "netmask": str(interface.network.netmask),
-                "prefix_length": interface.network.prefixlen,
-                "network": str(interface.network.network_address),
-                "cidr": str(interface.network),
-            }
+    # The job's mgmt address first: matching falls back to the mgmt-interface IP
+    # when NetBox has no primary_ip4, and Day-0 claimed / Day-N deploys to it.
+    mgmt = mgmt_facts(mgmt_address) or mgmt_facts((device.get("primary_ip4") or {}).get("address"))
+    if mgmt is not None:
+        ctx["mgmt"] = mgmt
     return {"device": ctx}
+
+
+def mgmt_facts(address: str | None) -> dict[str, Any] | None:
+    """Management-network facts of an `ip/prefix` address, shared by Day-0 and
+    Day-N so both derive the same values. None when absent or unparsable."""
+    if not address:
+        return None
+    try:
+        interface = ipaddress.ip_interface(str(address))
+    except ValueError:
+        return None
+    return {
+        "address": str(address),
+        "ip": str(interface.ip),
+        "netmask": str(interface.network.netmask),
+        "prefix_length": interface.network.prefixlen,
+        "network": str(interface.network.network_address),
+        "cidr": str(interface.network),
+    }
 
 
 SUPPORT_CONTACT_ROLE = "Local IT"
@@ -462,7 +491,10 @@ ACCESS_PORT_SOURCES: tuple[str, ...] = ("netbox", "device")
 
 
 async def load_device_context(
-    netbox: NetBoxClient, device: dict[str, Any], access_port_source: str = "netbox"
+    netbox: NetBoxClient,
+    device: dict[str, Any],
+    access_port_source: str = "netbox",
+    mgmt_address: str | None = None,
 ) -> dict[str, Any]:
     """Fetch the extra NetBox data a device's Day-N variables need — interfaces
     (uplinks), the site's VLANs, and support contacts — and build the full
@@ -487,7 +519,7 @@ async def load_device_context(
         contacts = await _safe(
             netbox.get_contact_assignments("dcim.device", int(device_id)), "device contacts"
         )
-    context = build_device_context(device, interfaces, site_vlans, contacts)
+    context = build_device_context(device, interfaces, site_vlans, contacts, mgmt_address)
     if access_port_source != "netbox":
         # blank, not absent: the template's `#if($ACCESS_PORTS != "")` picks its
         # own loop, and the wizard shows the variable as unresolved rather than
@@ -532,6 +564,19 @@ def build_deploy_payload(
     }
 
 
+async def wait_out_transient(
+    exc: CatalystTransientError, deadline: float, poll_interval: float, what: str
+) -> None:
+    """A poll hit a temporary CCC failure (unreachable, 429, 5xx): keep polling
+    until the deadline instead of failing a device CCC is still working on."""
+    if asyncio.get_event_loop().time() >= deadline:
+        raise exc
+    logger.warning(
+        "Polling %s: Catalyst Center temporarily unavailable, retrying: %s", what, exc.message
+    )
+    await asyncio.sleep(poll_interval)
+
+
 async def poll_task(
     client: CatalystCenterClient,
     task_id: str,
@@ -550,7 +595,11 @@ async def poll_task(
     """
     deadline = asyncio.get_event_loop().time() + task_timeout
     while True:
-        task = await client.get_task(task_id)
+        try:
+            task = await client.get_task(task_id)
+        except CatalystTransientError as exc:
+            await wait_out_transient(exc, deadline, poll_interval, f"{label} task {task_id}")
+            continue
         if task.get("isError"):
             reason = str(task.get("failureReason") or "")
             if not reason or always_drill or _points_at_the_task_tree(reason):
@@ -770,18 +819,49 @@ INTERACTIVE_HINT = (
 )
 
 
-def interactive_prompt_hint(reason: str) -> str:
-    """Actionable hint when CCC rejected a push because the device prompted.
+CONNECTION_LOST_HINT = (
+    " — the switch stopped answering right after `{command}`: no prompt came back, so Catalyst "
+    "Center reported 'invalid CLI'. That command most likely cut the management path CCC was "
+    "using - typically `switchport mode access` (or a shutdown/VLAN change) on the port the "
+    "switch is still reached over, e.g. the PnP onboarding port while its uplinks are not in "
+    "NetBox yet. Keep that port out of ACCESS_PORTS (NetBox: cable it, or mark it mgmt-only or "
+    "tagged) and deploy port templates last. Templates after this one that timed out are "
+    "follow-up failures, not separate problems."
+)
 
-    CCC only auto-answers the prompts it knows ([y/n], [confirm], ACCEPT?); a
-    plain `Do you wish to continue? [yes]:` is not one of them, and the failure
-    text alone gives the operator nothing to act on.
+# What CCC reports: "Invalid CLI - Current output : <what the switch sent back>
+# Current expects : <the prompts CCC would accept>". Only the first part says
+# what the device did; the second always lists "(Interactive)" prompts.
+_CLI_OUTPUT = re.compile(
+    r"current output\s*:\s*(?P<output>.*?)\s*(?:current expects\s*:|<br|</pre>|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+_DEVICE_PROMPT = re.compile(
+    r"do you wish to continue|\[(?:yes|no|y/n|confirm)\]|\(yes/\[no\]\)|\?\s*$",
+    re.IGNORECASE,
+)
+
+
+def interactive_prompt_hint(reason: str) -> str:
+    """Actionable hint for a CCC 'invalid CLI' push failure, based on what the
+    switch actually sent back (never on CCC's list of expected prompts):
+
+    * a question (`Do you wish to continue? [yes]:` …) CCC cannot answer →
+      the template needs an #INTERACTIVE block;
+    * only the echoed command and then nothing → the command cut the session
+      CCC was using (management/PnP port);
+    * an IOS error (`% Invalid input …`) → no hint, the error speaks for itself.
     """
-    lowered = reason.lower()
-    if "invalid cli" not in lowered:
+    if "invalid cli" not in reason.lower():
         return ""
-    if "(interactive)" in lowered or "do you wish to continue" in lowered:
+    match = _CLI_OUTPUT.search(reason)
+    output = match.group("output").strip() if match else ""
+    if _DEVICE_PROMPT.search(output):
         return INTERACTIVE_HINT
+    has_expects = "current expects" in reason.lower()
+    if output and has_expects and "%" not in output and "#" not in output:
+        command = output if len(output) <= 80 else output[:77] + "..."
+        return CONNECTION_LOST_HINT.format(command=command)
     return ""
 
 
@@ -796,7 +876,11 @@ async def poll_deployment(
     reason on failure (that is where CCC puts the CLI error)."""
     deadline = asyncio.get_event_loop().time() + task_timeout
     while True:
-        status_body = await client.get_deployment_status(deployment_id)
+        try:
+            status_body = await client.get_deployment_status(deployment_id)
+        except CatalystTransientError as exc:
+            await wait_out_transient(exc, deadline, poll_interval, f"deployment {deployment_id}")
+            continue
         status = str(status_body.get("status") or "").upper()
         if status in DEPLOYMENT_FAILED:
             reasons = [
@@ -985,7 +1069,36 @@ async def run_dayn(
     success also patches NetBox to `active`. Stage 1 runs with `activate=False`
     when a stage 2 will follow, so the source of truth is only touched once the
     device is really finished (§11).
+
+    Runs as a background task after the API committed `dayn_running`: anything
+    that escapes here must still close the job, or it stays running forever.
     """
+    try:
+        await _run_dayn(
+            job_id,
+            template_id=template_id,
+            device_params=device_params,
+            poll_interval=poll_interval,
+            task_timeout=task_timeout,
+            stage=stage,
+            activate=activate,
+        )
+    except Exception as exc:
+        logger.exception("Day-N run aborted", extra={"job_id": job_id})
+        message = exc.message if isinstance(exc, PnPBridgeError) else f"{type(exc).__name__}: {exc}"
+        _finish(job_id, error=f"Day-N run aborted: {message}")
+
+
+async def _run_dayn(
+    job_id: int,
+    *,
+    template_id: str,
+    device_params: dict[int, dict[str, str]],
+    poll_interval: float,
+    task_timeout: float,
+    stage: int,
+    activate: bool,
+) -> None:
     with open_session() as db:
         job = db.get(Job, job_id)
         if job is None:
@@ -1020,7 +1133,7 @@ async def run_dayn(
         catalyst_secret,
         tls_verify=catalyst_row.tls_verify,
     ) as client:
-        await asyncio.gather(
+        results = await asyncio.gather(
             *(
                 _deploy_one(
                     client,
@@ -1037,7 +1150,27 @@ async def run_dayn(
             ),
             return_exceptions=True,
         )
+    # gather(return_exceptions=True) keeps one device from aborting its siblings,
+    # but an exception that escaped a device task used to vanish without a log
+    # line and leave that device mid-deploy.
+    for device_id, result in zip(device_params, results, strict=True):
+        if isinstance(result, BaseException):
+            _report_unexpected(job_id, device_id, result)
     _finish(job_id)
+
+
+def _report_unexpected(job_id: int, device_id: int, exc: BaseException) -> None:
+    logger.error(
+        "Unexpected Day-N error for device",
+        exc_info=exc,
+        extra={"job_id": job_id, "device_id": device_id},
+    )
+    with open_session() as db:
+        device = db.get(JobDevice, device_id)
+        if device is not None and device.state in ("dayn_queued", "dayn_deploying"):
+            device.state = "dayn_failed"
+            device.error = f"Unexpected error: {type(exc).__name__}: {exc}"
+            device.dayn_finished_at = datetime.now(tz=UTC)
 
 
 def _catalyst_ok(row: ServiceSettings | None, secret: str | None) -> bool:
@@ -1063,5 +1196,12 @@ def _finish(job_id: int, error: str | None = None) -> None:
         elif "completed" in states or "activate_failed" in states:
             # §8: NetBox PATCH failure after successful Day-N ⇒ partial_success
             job.status = "partial_success"
+        elif "dayn_complete" in states:
+            # Stage 1 deployed with activation deferred: the ports stage follows (§11).
+            # Not a failure - reporting "dayn_failed" here made the wizard show a red
+            # summary with no way on to the ports stage.
+            job.status = (
+                "dayn_stage1_complete" if states == {"dayn_complete"} else "dayn_stage1_partial"
+            )
         else:
             job.status = "dayn_failed"

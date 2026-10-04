@@ -4,12 +4,13 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from app.db.models import DayNMapping, Job, JobDevice, SiteMapping, TemplateSecret
@@ -92,6 +93,9 @@ class JobOut(BaseModel):
     created_at: str
     device_count: int
     devices: list[JobDeviceOut]
+    # the templates "Resolve variables" ran for - a resumed wizard needs them
+    dayn_template_id: str | None = None
+    dayn2_template_id: str | None = None
 
 
 class DeviceUpdate(BaseModel):
@@ -130,6 +134,8 @@ def _job_out(job: Job) -> JobOut:
         created_at=job.created_at.isoformat(),
         device_count=len(job.devices),
         devices=[_device_out(d) for d in job.devices],
+        dayn_template_id=job.dayn_template_id,
+        dayn2_template_id=job.dayn2_template_id,
     )
 
 
@@ -174,6 +180,32 @@ def _get_job(db: Session, job_id: int) -> Job:
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
     return job
+
+
+# Statuses from which Day-0 may no longer be (re-)run: Day-N has touched the devices.
+DAYN_STARTED = ("completed", "partial_success")
+
+
+def _start_phase(db: Session, job: Job, status: str) -> None:
+    """Move the job into a `*_running` phase - atomically.
+
+    Checking `job.status` on the loaded object and then setting it is a race:
+    a double click or a retried POST lets two requests both see an idle job and
+    both start a background run, i.e. two site-claims per device. The
+    conditional UPDATE is decided by the database row; SQLite serialises the
+    writers, so exactly one request wins and every other one gets 409.
+    """
+    result = cast(
+        CursorResult[Any],
+        db.execute(
+            update(Job)
+            .where(Job.id == job.id, Job.status.not_like("%\\_running", escape="\\"))
+            .values(status=status)
+        ),
+    )
+    if result.rowcount != 1:
+        raise HTTPException(status_code=409, detail="A job phase is already running.")
+    db.refresh(job)
 
 
 @router.get("/pnp-devices")
@@ -333,7 +365,9 @@ async def prepare_day0(job_id: int, payload: Day0PrepareRequest, db: DbSession) 
             context: dict[str, Any] = {"device": {}}
             if device.netbox_device_id is not None:
                 netbox_device = await netbox.get_device(device.netbox_device_id)
-                context = await load_device_context(netbox, netbox_device)
+                context = await load_device_context(
+                    netbox, netbox_device, mgmt_address=device.mgmt_ip
+                )
             # the gateway NetBox documents for the picked mgmt VLAN, resolved
             # lazily (a site can carry dozens of VLANs) and cached per VLAN
             gateway = None
@@ -383,24 +417,34 @@ def claim_job(
 ) -> JobOut:
     """Start Day-0 claiming for all matched devices (runs in the background)."""
     job = _get_job(db, job_id)
-    if job.status == "day0_running":
-        raise HTTPException(status_code=409, detail="Day-0 is already running for this job.")
-    claimable = [d for d in job.devices if d.match_status == MATCHED]
+    if job.status.endswith("_running"):
+        raise HTTPException(status_code=409, detail="A job phase is already running.")
+    if job.status.startswith("dayn_") or job.status in DAYN_STARTED:
+        raise HTTPException(
+            status_code=409,
+            detail="Day-N has already started for this job - Day-0 can no longer be re-run. "
+            "Start a new job for devices that need to be claimed again.",
+        )
+    # Re-running Day-0 (e.g. after day0_partial) retries only the devices that did
+    # not succeed: a second site-claim for a provisioned switch is rejected by CCC
+    # and would knock a good device out of Day-N.
+    claimable = [d for d in job.devices if d.match_status == MATCHED and d.state != "success"]
     if not claimable:
-        raise HTTPException(status_code=422, detail="No matched devices to claim.")
-    job.status = "day0_running"
+        raise HTTPException(
+            status_code=422,
+            detail="No matched devices left to claim - every matched device already succeeded.",
+        )
+    _start_phase(db, job, "day0_running")
     job.current_step = 3
+    # The operator's manual values go to the claim in memory only - like Day-N,
+    # never into the job record: an open field may well be a password.
+    manual: dict[int, dict[str, str]] = {}
     for device in claimable:
         device.state = "queued"
         device.error = None
-        # merge the operator's manual values into the resolved Day-0 variables
         overrides = payload.manual.get(device.id, {})
-        if device.day0_variables and overrides:
-            merged = {k: dict(v) for k, v in device.day0_variables.items()}
-            for variable, value in overrides.items():
-                if variable in merged:
-                    merged[variable]["value"] = value
-            device.day0_variables = merged
+        known = device.day0_variables or {}
+        manual[device.id] = {k: v for k, v in overrides.items() if k in known}
     # Commit now: the background task opens its own sessions and must not
     # contend with this request's still-open write transaction.
     db.commit()
@@ -410,7 +454,12 @@ def claim_job(
     if payload.timeout is not None:
         kwargs["device_timeout"] = payload.timeout
     background.add_task(
-        run_day0, job_id, config_id=payload.config_id, image_id=payload.image_id, **kwargs
+        run_day0,
+        job_id,
+        config_id=payload.config_id,
+        image_id=payload.image_id,
+        manual=manual,
+        **kwargs,
     )
     logger.info("Day-0 started", extra={"job_id": job_id, "devices": len(claimable)})
     return _job_out(job)
@@ -506,7 +555,10 @@ async def _prepare_stage(
             context: dict[str, Any] = {"device": {}}
             if device.netbox_device_id is not None:
                 netbox_device = await netbox.get_device(device.netbox_device_id)
-                context = await load_device_context(netbox, netbox_device, access_ports_from)
+                # the address Day-0 claimed and this stage deploys to
+                context = await load_device_context(
+                    netbox, netbox_device, access_ports_from, mgmt_address=device.mgmt_ip
+                )
             resolved = resolve_variables(variables, mappings, context, secret_names=secret_names)
             if stage == 1:
                 device.dayn_variables = resolved
@@ -552,6 +604,20 @@ def _deploy_stage(
     devices = _dayn_eligible(job, stage)
     if not devices:
         raise HTTPException(status_code=422, detail="No Day-0-successful devices in this job.")
+    # Deploy exactly the template whose variables were resolved: another template
+    # would be rendered with foreign (or no) values and could still end with the
+    # NetBox device set to active.
+    resolved_for = job.dayn_template_id if stage == 1 else job.dayn2_template_id
+    unresolved = [
+        d.serial for d in devices if (d.dayn_variables if stage == 1 else d.dayn2_variables) is None
+    ]
+    if resolved_for != payload.template_id or unresolved:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Template {payload.template_id or '(none)'} has not been resolved for "
+            + (f"device(s) {', '.join(unresolved)}" if unresolved else "this job")
+            + " - run 'Resolve variables' for it first.",
+        )
 
     device_params: dict[int, dict[str, str]] = {}
     for device in devices:
@@ -583,7 +649,9 @@ def _deploy_stage(
                     )
                 params[variable] = get_secret_box().decrypt(row.secret_encrypted)
             else:
-                params[variable] = str(info.get("value"))
+                # claim_value is the wire form when it differs from the shown
+                # value (MGMT_SUBNET shown as CIDR, sent as a dotted mask)
+                params[variable] = str(info.get("claim_value") or info.get("value"))
         if missing:
             raise HTTPException(
                 status_code=422,
@@ -592,7 +660,7 @@ def _deploy_stage(
             )
         device_params[device.id] = params
 
-    job.status = "dayn_running"
+    _start_phase(db, job, "dayn_running")
     job.current_step = 4 if stage == 1 else 5
     for device in devices:
         device.state = "dayn_queued"

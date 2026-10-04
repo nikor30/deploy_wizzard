@@ -49,6 +49,9 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+const notLoaded = (reason: string) =>
+  `${reason} - the stored mappings could not be loaded, so saving is disabled to avoid overwriting them. Reload the page or import a JSON export.`
+
 const listButtonClass = (selected: boolean, mapped: boolean) =>
   [
     'block w-full truncate rounded-md px-3 py-2 text-left text-sm transition-colors',
@@ -69,12 +72,19 @@ export default function SettingsMapping() {
   const [banner, setBanner] = useState<Banner | null>(null)
   const [sourceError, setSourceError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Saving replaces the whole mapping table. Until the stored mappings are
+  // loaded (or deliberately replaced by an import) the list is incomplete, and
+  // saving it would delete every mapping it does not contain.
+  const [baseLoaded, setBaseLoaded] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     fetchJson<{ mappings: SiteMapping[] }>('/api/mappings/sites')
-      .then((body) => setMappings(body.mappings))
-      .catch((err: Error) => setBanner({ ok: false, detail: err.message }))
+      .then((body) => {
+        setMappings(body.mappings)
+        setBaseLoaded(true)
+      })
+      .catch((err: Error) => setBanner({ ok: false, detail: notLoaded(err.message) }))
     fetchJson<NetBoxSite[]>('/api/mappings/sources/netbox')
       .then(setNetboxSites)
       .catch((err: Error) => setSourceError(err.message))
@@ -197,6 +207,7 @@ export default function SettingsMapping() {
       const parsed = JSON.parse(await file.text()) as { mappings?: SiteMapping[] }
       if (!Array.isArray(parsed.mappings)) throw new Error('missing "mappings" array')
       setMappings(parsed.mappings)
+      setBaseLoaded(true) // an import is a deliberate full replacement
       setBanner({
         ok: true,
         detail: `Imported ${parsed.mappings.length} mappings — review and save.`,
@@ -317,7 +328,7 @@ export default function SettingsMapping() {
         <button
           type="button"
           className={actionButton}
-          disabled={suggesting || netboxSites === null || cccSites === null}
+          disabled={suggesting || netboxSites === null || cccSites === null || !baseLoaded}
           onClick={() => void suggest()}
         >
           {suggesting ? 'Matching…' : 'Suggest mappings'}
@@ -369,7 +380,7 @@ export default function SettingsMapping() {
         <button
           type="button"
           className="rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sky-500 disabled:opacity-50"
-          disabled={busy}
+          disabled={busy || !baseLoaded}
           onClick={() => void save()}
         >
           {busy ? 'Saving…' : 'Save mappings'}

@@ -16,8 +16,13 @@ from typing import Any
 
 import httpx
 
-from app.clients.base import DEFAULT_TIMEOUT, get_with_retries, trace_http
-from app.errors import CatalystAuthError, CatalystError
+from app.clients.base import (
+    DEFAULT_TIMEOUT,
+    get_with_retries,
+    is_retryable_status,
+    trace_http,
+)
+from app.errors import CatalystAuthError, CatalystError, CatalystTransientError
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +143,7 @@ class CatalystCenterClient:
                 auth=(self._username, self._password),
             )
         except httpx.TransportError as exc:
-            raise CatalystError(f"Cannot reach Catalyst Center: {exc}") from exc
+            raise CatalystTransientError(f"Cannot reach Catalyst Center: {exc}") from exc
         if response.status_code in (401, 403):
             raise CatalystAuthError(
                 "Catalyst Center rejected the credentials (HTTP "
@@ -179,7 +184,7 @@ class CatalystCenterClient:
                     method, path, headers=headers, params=params, json=json
                 )
             except httpx.TransportError as exc:
-                raise CatalystError(f"Cannot reach Catalyst Center: {exc}") from exc
+                raise CatalystTransientError(f"Cannot reach Catalyst Center: {exc}") from exc
 
     async def _request(
         self,
@@ -214,7 +219,13 @@ class CatalystCenterClient:
                 )
         trace_http(method, path, json, response, service="catalyst")
         if response.status_code >= 400:
-            raise CatalystError(
+            # 429/5xx are temporary: a long poll may keep going on them
+            error = (
+                CatalystTransientError
+                if is_retryable_status(response.status_code)
+                else CatalystError
+            )
+            raise error(
                 f"Catalyst Center {method} {path} failed with "
                 f"HTTP {response.status_code}{_error_detail(response)}."
             )

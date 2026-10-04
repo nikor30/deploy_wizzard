@@ -20,7 +20,7 @@ from app.api.stats import router as stats_router
 from app.api.wizard import router as wizard_router
 from app.config import get_settings
 from app.errors import ConfigurationError, PnPBridgeError
-from app.logging_setup import set_http_trace, setup_logging
+from app.logging_setup import open_db_sink, set_http_trace, setup_logging
 
 REPO_ROOT = Path(__file__).parent.parent
 # Populated by the container build (frontend/dist copied to app/static).
@@ -41,6 +41,13 @@ async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
     # so credentials can be added later via the web UI.
     settings.ensure_secret_key()
     run_migrations()
+    # Only now does `log_entries` exist: persist what was queued during startup.
+    open_db_sink()
+    # Nothing can be running yet: a job still marked `*_running` lost its
+    # background task to a restart and would otherwise be stuck for good.
+    from app.services.recovery import recover_interrupted_jobs
+
+    recover_interrupted_jobs()
     # Restore the stored HTTP-trace setting: a capture in progress must survive
     # a container restart, or the operator loses the very call being chased.
     from app.db.session import open_session
@@ -84,8 +91,14 @@ def create_app() -> FastAPI:
     @application.exception_handler(Exception)
     async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
         # Every unexpected error must be visible on the Logs page (app.* sink).
+        # type + text in the message itself: the Logs page list shows the message,
+        # the traceback sits in the entry's context (exc_info)
         logging.getLogger("app.api").exception(
-            "Unhandled error on %s %s", request.method, request.url.path
+            "Unhandled error on %s %s: %s: %s",
+            request.method,
+            request.url.path,
+            type(exc).__name__,
+            exc,
         )
         return JSONResponse(
             status_code=500,
