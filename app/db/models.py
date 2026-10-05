@@ -2,7 +2,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
+
+from app.logging_setup import scrub
 
 
 class Base(DeclarativeBase):
@@ -73,6 +75,12 @@ class JobDevice(Base):
 
     job: Mapped[Job] = relationship(back_populates="devices")
 
+    @validates("error")
+    def _scrub_error(self, _key: str, value: str | None) -> str | None:
+        # CCC echoes the rejected CLI line into its errors ("… key <plaintext>");
+        # the job record is served by the API, so known secret values never land here.
+        return scrub(value) if value else value
+
 
 class LogEntry(Base):
     """Structured log record persisted by the DB sink (context is redacted)."""
@@ -141,6 +149,11 @@ class WebhookDelivery(Base):
     attempts: Mapped[int] = mapped_column(default=0)
     last_error: Mapped[str | None] = mapped_column(String(1024))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    @validates("last_error")
+    def _scrub_last_error(self, _key: str, value: str | None) -> str | None:
+        # the receiver's reply body is stored here and may echo our auth token
+        return scrub(value) if value else value
 
 
 class SiteMapping(Base):

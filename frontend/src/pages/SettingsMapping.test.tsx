@@ -39,6 +39,24 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock)
 })
 
+describe('SettingsMapping after a failed load', () => {
+  it('does not offer to save a table that would delete the stored mappings', async () => {
+    // Regression: the list starts empty; after a failed GET, pairing one site and
+    // saving replaced every stored mapping with that single pair.
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/mappings/sources/netbox') return Promise.resolve(jsonResponse(netboxSites))
+      if (url === '/api/mappings/sources/ccc') return Promise.resolve(jsonResponse(cccSites))
+      return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({}) })
+    })
+    render(<SettingsMapping />)
+    expect(await screen.findByText(/could not be loaded/)).toBeInTheDocument()
+    await userEvent.click(await screen.findByRole('button', { name: /FFM-DC1/ }))
+    await userEvent.click(screen.getByRole('button', { name: 'Global/Germany/Frankfurt/DC1' }))
+    expect(screen.getByRole('button', { name: 'Save mappings' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Suggest mappings' })).toBeDisabled()
+  })
+})
+
 describe('SettingsMapping', () => {
   it('shows both site columns and flags unmapped NetBox sites', async () => {
     render(<SettingsMapping />)

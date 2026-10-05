@@ -32,6 +32,9 @@ interface AppFlags {
   provision_method?: string
 }
 
+const flagsLoadMessage = (reason: string) =>
+  `The options below could not be loaded (${reason}) - they are not saved until the page is reloaded successfully.`
+
 /** "onboard, webasto" -> ["onboard", "webasto"] (blanks dropped) */
 function toWords(text: string): string[] {
   return text
@@ -187,14 +190,22 @@ export default function SettingsCredentials() {
   // kept as the raw comma-separated text so typing a comma isn't fought with
   const [day0Filter, setDay0Filter] = useState('')
   const [daynFilter, setDaynFilter] = useState('')
+  // The flags PUT always sends the complete set. Until the stored values are
+  // known, the state above holds defaults - saving then would silently reset
+  // provisioning, template filters and PnP states on the server.
+  const [flagsLoaded, setFlagsLoaded] = useState(false)
+  const [flagsError, setFlagsError] = useState<string | null>(null)
 
   useEffect(() => {
     getCredentials()
       .then((credentials) => setForm(toForm(credentials)))
       .catch((err: Error) => setLoadError(err.message))
     fetch('/api/settings/flags')
-      .then((r) => r.json())
-      .then((f: AppFlags) => {
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json() as Promise<AppFlags>
+      })
+      .then((f) => {
         setDebug(f.debug)
         if (f.pnp_states?.length) setPnpStates(f.pnp_states)
         setDay0Filter((f.day0_template_filter ?? []).join(', '))
@@ -203,12 +214,14 @@ export default function SettingsCredentials() {
         setTrace(f.http_trace ?? false)
         setPortSource(f.access_port_source ?? 'netbox')
         setProvMethod(f.provision_method ?? 'wired')
+        setFlagsLoaded(true)
       })
-      .catch(() => setDebug(false))
+      .catch((err: Error) => setFlagsError(flagsLoadMessage(err.message)))
   }, [])
 
-  const putFlags = (next: Partial<AppFlags>) =>
-    fetch('/api/settings/flags', {
+  const putFlags = async (next: Partial<AppFlags>) => {
+    if (!flagsLoaded) throw new Error('Options could not be loaded - reload the page first.')
+    const res = await fetch('/api/settings/flags', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -223,32 +236,54 @@ export default function SettingsCredentials() {
         ...next,
       }),
     })
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`
+      try {
+        const body = (await res.json()) as { detail?: string }
+        if (body.detail) detail = body.detail
+      } catch {
+        /* keep the status */
+      }
+      throw new Error(`Option not saved: ${detail}`)
+    }
+  }
+
+  // apply optimistically; a rejected save puts the old value back and says why
+  const applyFlag = async (next: Partial<AppFlags>, revert: () => void) => {
+    try {
+      await putFlags(next)
+      if (flagsLoaded) setFlagsError(null)
+    } catch (err) {
+      revert()
+      setFlagsError((err as Error).message)
+    }
+  }
 
   const toggleDebug = async (value: boolean) => {
     setDebug(value)
-    await putFlags({ debug: value }).catch(() => setDebug(!value))
+    await applyFlag({ debug: value }, () => setDebug(!value))
   }
 
   const toggleProvision = async (value: boolean) => {
     setProvision(value)
-    await putFlags({ provision_after_claim: value }).catch(() => setProvision(!value))
+    await applyFlag({ provision_after_claim: value }, () => setProvision(!value))
   }
 
   const toggleTrace = async (value: boolean) => {
     setTrace(value)
-    await putFlags({ http_trace: value }).catch(() => setTrace(!value))
+    await applyFlag({ http_trace: value }, () => setTrace(!value))
   }
 
   const changeProvMethod = async (value: string) => {
     const previous = provMethod
     setProvMethod(value)
-    await putFlags({ provision_method: value }).catch(() => setProvMethod(previous))
+    await applyFlag({ provision_method: value }, () => setProvMethod(previous))
   }
 
   const changePortSource = async (value: string) => {
     const previous = portSource
     setPortSource(value)
-    await putFlags({ access_port_source: value }).catch(() => setPortSource(previous))
+    await applyFlag({ access_port_source: value }, () => setPortSource(previous))
   }
 
   const togglePnpState = async (state: string, checked: boolean) => {
@@ -257,15 +292,16 @@ export default function SettingsCredentials() {
     const ordered = PNP_STATES.filter((s) => next.includes(s))
     const previous = pnpStates
     setPnpStates(ordered)
-    await putFlags({ pnp_states: ordered }).catch(() => setPnpStates(previous))
+    await applyFlag({ pnp_states: ordered }, () => setPnpStates(previous))
   }
 
   // saved on blur rather than per keystroke
   const saveTemplateFilter = (step: 'day0' | 'dayn', text: string) =>
-    void putFlags(
+    void applyFlag(
       step === 'day0'
         ? { day0_template_filter: toWords(text) }
         : { dayn_template_filter: toWords(text) },
+      () => undefined,
     )
 
   if (loadError) {
@@ -325,6 +361,11 @@ export default function SettingsCredentials() {
         Stored secrets are encrypted at rest and shown masked. Leave a secret field empty to keep
         the stored value.
       </p>
+      {flagsError && (
+        <div className="mt-4">
+          <StatusBanner result={{ ok: false, detail: flagsError }} />
+        </div>
+      )}
 
       <div className="mt-6 flex flex-col gap-6">
         <section className={cardClass} aria-label="Catalyst Center">

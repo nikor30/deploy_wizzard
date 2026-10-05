@@ -49,6 +49,9 @@ MGMT_INTERFACE_PREFIXES = ("mgmt", "vlan")
 MATCHED = "matched"
 UNMATCHED = "unmatched"
 UNMAPPED_SITE = "unmapped_site"
+# Several planned NetBox devices carry the serial: picking one would claim with
+# the wrong hostname/IP/site and later set the wrong device active.
+AMBIGUOUS = "ambiguous"
 
 
 def normalize_serial(serial: str) -> str:
@@ -96,16 +99,33 @@ async def match_serials(
 ) -> list[MatchResult]:
     """Match the given CCC serials against NetBox devices in status `planned`."""
     planned = await netbox.get_devices(status="planned")
-    by_serial: dict[str, dict[str, Any]] = {}
+    by_serial: dict[str, list[dict[str, Any]]] = {}
     for candidate in planned:
         raw = candidate.get("serial") or ""
         if raw.strip():
-            by_serial[normalize_serial(raw)] = candidate
+            by_serial.setdefault(normalize_serial(raw), []).append(candidate)
 
     vlan_cache: dict[int, list[dict[str, Any]]] = {}
     results: list[MatchResult] = []
     for serial in serials:
-        device = by_serial.get(normalize_serial(serial))
+        candidates = by_serial.get(normalize_serial(serial), [])
+        if len(candidates) > 1:
+            logger.warning(
+                "Serial %s is carried by %d planned NetBox devices - not matched; make it "
+                "unique in NetBox, then re-run matching",
+                serial,
+                len(candidates),
+                extra={
+                    "serial": serial,
+                    "netbox_devices": [
+                        {"id": d.get("id"), "name": d.get("name"), "serial": d.get("serial")}
+                        for d in candidates
+                    ],
+                },
+            )
+            results.append(MatchResult(serial=serial, match_status=AMBIGUOUS))
+            continue
+        device = candidates[0] if candidates else None
         if device is None:
             logger.warning(
                 "No planned NetBox device for serial",

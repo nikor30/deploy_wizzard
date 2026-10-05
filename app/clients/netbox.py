@@ -3,6 +3,7 @@
 import logging
 from types import TracebackType
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -21,6 +22,7 @@ class NetBoxClient:
         tls_verify: bool = True,
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
+        self._base = urlsplit(base_url.rstrip("/"))
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             verify=tls_verify,
@@ -72,9 +74,22 @@ class NetBoxClient:
         while url:
             payload = (await self._get(url, params=next_params)).json()
             items.extend(payload.get("results", []))
-            url = payload.get("next")
+            next_link = payload.get("next")
+            url = self._on_configured_host(next_link) if next_link else None
             next_params = None  # the next link already carries the query string
         return items
+
+    def _on_configured_host(self, link: str) -> str:
+        """Keep only path + query of a `next` link, on the configured scheme/host.
+
+        NetBox builds `next` from what it believes its own URL is. Behind a TLS
+        proxy without X-Forwarded-Proto that is `http://…` or an internal host
+        name - following it verbatim would send the API token there.
+        """
+        target = urlsplit(link)
+        if (target.scheme, target.netloc) != (self._base.scheme, self._base.netloc):
+            logger.debug("NetBox next link %s rewritten onto the configured host", link)
+        return urlunsplit((self._base.scheme, self._base.netloc, target.path, target.query, ""))
 
     async def test_connection(self) -> str:
         """GET /api/status/ and return the NetBox version string."""

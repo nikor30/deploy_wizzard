@@ -299,6 +299,93 @@ describe('Wizard', () => {
     ).toBeInTheDocument()
   })
 
+  it('offers the ports stage after a base deploy with deferred activation', async () => {
+    // Regression: stage 1 ended as "dayn_failed" - a dead end without the ports stage.
+    const preparedJob = {
+      ...finishedJob,
+      devices: [
+        {
+          ...finishedJob.devices[0],
+          dayn_variables: { SNMP_LOCATION: { value: 'Rack 1', source: 'mapped' } },
+        },
+        finishedJob.devices[1],
+      ],
+    }
+    const stage1Job = {
+      ...preparedJob,
+      status: 'dayn_stage1_complete',
+      devices: preparedJob.devices.map((d) =>
+        d.match_status === 'matched' ? { ...d, state: 'dayn_complete' } : d,
+      ),
+    }
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/wizard/jobs' && !init?.method)
+        return Promise.resolve(jsonResponse([finishedJob]))
+      if (url.startsWith('/api/wizard/day0/templates'))
+        return Promise.resolve(jsonResponse(templates))
+      if (url.endsWith('/dayn/prepare')) return Promise.resolve(jsonResponse(preparedJob))
+      if (url.endsWith('/dayn/deploy'))
+        return Promise.resolve(jsonResponse({ ...preparedJob, status: 'dayn_running' }))
+      if (url === '/api/wizard/jobs/7') return Promise.resolve(jsonResponse(stage1Job))
+      return Promise.resolve(jsonResponse(finishedJob))
+    })
+    renderWizard()
+    await userEvent.click(await screen.findByRole('button', { name: 'Resume' }))
+    await userEvent.click(
+      await screen.findByRole('button', { name: /Continue to Day-N \(1 device/ }),
+    )
+    await userEvent.selectOptions(await screen.findByLabelText(/Template/i), 'tmpl-1')
+    await userEvent.click(screen.getByRole('button', { name: 'Resolve variables' }))
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Deploy, then configure ports' }),
+    )
+
+    expect(
+      await screen.findByText(/1 device\(s\) ready for ports/, {}, { timeout: 4000 }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Continue to ports/ })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: /Deploy Day-N/ })).not.toBeInTheDocument()
+  })
+
+  it('shows and gates the ports stage on its own variables', async () => {
+    // Regression: stage 2 rendered and validated the stage-1 variables.
+    const stage1Job = {
+      ...finishedJob,
+      status: 'dayn_stage1_complete',
+      dayn_template_id: 'tmpl-1',
+      dayn2_template_id: 'tmpl-1',
+      devices: [
+        {
+          ...finishedJob.devices[0],
+          state: 'dayn_complete',
+          dayn_variables: { CONTACT: { value: null, source: 'manual' } },
+          dayn2_variables: {
+            UPLINK_NAME: { value: null, source: 'manual' },
+            ACCESS_VLAN: { value: '299', source: 'netbox' },
+          },
+        },
+        finishedJob.devices[1],
+      ],
+    }
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/wizard/jobs' && !init?.method)
+        return Promise.resolve(jsonResponse([stage1Job]))
+      if (url.startsWith('/api/wizard/day0/templates'))
+        return Promise.resolve(jsonResponse(templates))
+      return Promise.resolve(jsonResponse(stage1Job))
+    })
+    renderWizard()
+    await userEvent.click(await screen.findByRole('button', { name: 'Resume' }))
+
+    const uplink = await screen.findByLabelText('UPLINK_NAME for FCW1234ABCD')
+    expect(screen.getByText('299')).toBeInTheDocument()
+    expect(screen.queryByLabelText('CONTACT for FCW1234ABCD')).not.toBeInTheDocument()
+    const deploy = screen.getByRole('button', { name: /Deploy ports & uplinks/ })
+    expect(deploy).toBeDisabled()
+    await userEvent.type(uplink, 'Te1/1/1')
+    expect(deploy).toBeEnabled()
+  })
+
   it('resumes a completed job directly into the summary', async () => {
     const doneJob = { ...finishedJob, status: 'partial_success' }
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
@@ -335,6 +422,26 @@ describe('Wizard', () => {
       expect(putCall).toBeDefined()
       expect(JSON.parse((putCall![1] as RequestInit).body as string)).toEqual({ mgmt_vlan: 110 })
     })
+  })
+
+  it('flags a serial carried by several planned NetBox devices and excludes it', async () => {
+    const ambiguousJob = {
+      ...matchedJob,
+      devices: [matchedJob.devices[0], { ...matchedJob.devices[1], match_status: 'ambiguous' }],
+    }
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/wizard/jobs' && !init?.method)
+        return Promise.resolve(jsonResponse([ambiguousJob]))
+      if (url.endsWith('/match')) return Promise.resolve(jsonResponse(ambiguousJob))
+      return Promise.resolve(jsonResponse({}))
+    })
+    renderWizard()
+    await userEvent.click(await screen.findByRole('button', { name: 'Resume' }))
+
+    const card = await screen.findByRole('region', { name: 'Match FCW5678EFGH' })
+    expect(within(card).getByText('duplicate serial in NetBox')).toBeInTheDocument()
+    expect(within(card).getByText(/Several planned NetBox devices/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Continue to Day-0 claim \(1 device/ })).toBeEnabled()
   })
 
   it('shows the match requirements and re-runs matching on demand', async () => {

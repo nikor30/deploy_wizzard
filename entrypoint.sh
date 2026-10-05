@@ -7,7 +7,12 @@ set -e
 PORT="${PNPB_PORT:-8060}"
 
 if [ "$(id -u)" = "0" ]; then
-    chown -R pnpb:pnpb /data
+    # Only when something is actually foreign-owned: a recursive chown on every
+    # start rewrites every inode of the volume (slow, touches ctime/backups).
+    if [ -n "$(find /data -xdev \( ! -user pnpb -o ! -group pnpb \) -print -quit)" ]; then
+        echo "entrypoint: repairing /data ownership (files not owned by pnpb)" >&2
+        chown -R pnpb:pnpb /data
+    fi
     exec setpriv --reuid=pnpb --regid=pnpb --clear-groups \
         uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
 fi
